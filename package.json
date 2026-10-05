@@ -11,5 +11,9 @@
     "dev": "npm run dev --workspace=platform",
     "build": "npm run build --workspace=platform",
     "start": "npm run start --workspace=platform"
+  },
+  "overrides": {
+    "react": "$react",
+    "react-dom": "$react-dom"
   }
 }
