@@ -123,7 +123,7 @@ export default function NewWorkspacePage() {
               label={t('workspace.language_label')}
               options={languageOptions}
               value={language}
-              onChange={(e) => setLanguage(e.target.value)}
+              onChange={(e) => setLanguage(e.target.value as 'fr' | 'en')}
             />
 
             <Input
