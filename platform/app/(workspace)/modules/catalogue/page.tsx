@@ -1,76 +1,71 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useTranslation } from '@/lib/i18n';
-import { platformConfig } from '@/config';
+import { useSession } from '@/lib/useSession';
+import { getModules, activateModule } from '@/lib/modules';
+import { getSubscription } from '@/lib/billing';
+import { ModuleManifest, Subscription } from '@kazibox/sdk';
 
 export default function ModuleCataloguePage() {
-  const { t } = useTranslation();
+  const router = useRouter();
+  const { t, language } = useTranslation();
+  const { user, workspace } = useSession();
 
-  const previewModules = [
-    {
-      id: 'hotel-property',
-      name: 'Hôtel & Résidence Meublée',
-      category: 'Hospitality',
-      desc: 'Gestion des chambres, réservations en direct & OTA, calendrier interactif, facturation des séjours et suivi du ménage.',
-      price: '15 000 XOF / mois',
-      features: ['Calendrier des réservations', 'Facturation clients séparée', 'PWA mobile pour réceptionnistes'],
-      status: 'Phase 2 (En cours)',
-      isFirst: true,
-    },
-    {
-      id: 'garage-auto',
-      name: 'Garage & Atelier Mécanique',
-      category: 'Automotive',
-      desc: 'Ordres de réparation (OR), devis, suivi des véhicules, fiches clients et stock des pièces détachées.',
-      price: '15 000 XOF / mois',
-      features: ['Fiches véhicules & immatriculations', 'Suivi de main-d’œuvre', 'Ordres de réparation numériques'],
-      status: 'À venir',
-      isFirst: false,
-    },
-    {
-      id: 'taxi-fleet',
-      name: 'Taxi & Flotte de Transport',
-      category: 'Logistics',
-      desc: 'Suivi des courses, gestion des chauffeurs, affectation des véhicules, carnet d’entretien et recettes quotidiennes.',
-      price: '15 000 XOF / mois',
-      features: ['Recettes journalières par chauffeur', 'Suivi carburant & vidanges', 'Gestion des pannes'],
-      status: 'À venir',
-      isFirst: false,
-    },
-    {
-      id: 'salon-beauty',
-      name: 'Salon de Coiffure & Esthétique',
-      category: 'Services',
-      desc: 'Prise de rendez-vous, planning des coiffeurs/esthéticiennes, encaissements rapides et historique des prestations.',
-      price: '10 000 XOF / mois',
-      features: ['Planning par collaborateur', 'Caisse simplifiée tactile', 'Fidélité client par SMS'],
-      status: 'À venir',
-      isFirst: false,
-    },
-    {
-      id: 'pharmacy',
-      name: 'Pharmacie & Parapharmacie',
-      category: 'Health',
-      desc: 'Gestion des ordonnances, inventaire des médicaments avec dates de péremption et caisse sécurisée.',
-      price: '20 000 XOF / mois',
-      features: ['Alerte dates de péremption', 'Code-barres & recherche rapide', 'Rapports d’inventaire'],
-      status: 'À venir',
-      isFirst: false,
-    },
-    {
-      id: 'restaurant-bar',
-      name: 'Restaurant, Bar & Maquis',
-      category: 'Food & Beverage',
-      desc: 'Prise de commande en salle sur mobile, envoi en cuisine, gestion des tables et clôture de caisse simplifiée.',
-      price: '15 000 XOF / mois',
-      features: ['Prise de commande mobile tactile', 'Gestion des stocks de boissons', 'Clôture Z journalière'],
-      status: 'À venir',
-      isFirst: false,
-    },
-  ];
+  const [modules, setModules] = useState<ModuleManifest[]>([]);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const role = user?.role || 'worker';
+  const isOwner = role === 'owner' || role === 'platform_admin';
+
+  const loadData = async () => {
+    if (!workspace) return;
+    const [mods, sub] = await Promise.all([
+      getModules(),
+      getSubscription(workspace.company_id),
+    ]);
+    setModules(mods);
+    setSubscription(sub);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [workspace]);
+
+  const handleActivate = async (mod: ModuleManifest) => {
+    if (!workspace || !isOwner) return;
+
+    // Check if current subscription already covers it (or if All Access)
+    const isCovered =
+      subscription &&
+      (subscription.status === 'active' || subscription.status === 'expiring_soon') &&
+      (subscription.planId === 'all_access' || subscription.includedModuleIds.includes(mod.id));
+
+    if (isCovered) {
+      setActionLoading(mod.id);
+      await activateModule(workspace.company_id, mod.id);
+      await loadData();
+      setActionLoading(null);
+      router.push(`/modules/${mod.slug}`);
+    } else {
+      // Redirect to centralized billing plan selection with module preselected
+      router.push(`/billing?plan=single&module=${mod.id}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-[400px] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-[var(--kazibox-primary,#6D28D9)] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -79,83 +74,197 @@ export default function ModuleCataloguePage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h1 className="text-2xl sm:text-3xl font-black text-[#1F2937]">
-              {t('placeholders.module_catalogue_title')}
+              {t('catalogue.title')}
             </h1>
-            <Badge variant="yellow" size="sm">
-              {t('placeholders.coming_next')}
+            <Badge variant="purple" size="sm">
+              {modules.length} {t('catalogue.modules_count')}
             </Badge>
           </div>
           <p className="text-sm sm:text-base text-[#6B7280] max-w-3xl">
-            {t('placeholders.module_catalogue_desc')}
+            {t('catalogue.subtitle')}
           </p>
         </div>
 
-        <Link href="/dashboard">
+        <Link href="/modules/my-modules">
           <Button variant="outline" size="sm">
-            &larr; {t('placeholders.back_dashboard')}
+            📦 {t('nav.my_modules')}
           </Button>
         </Link>
       </div>
 
-      {/* Integration Notice */}
-      <div className="p-4 bg-[var(--kazibox-primary-soft,#F3E8FF)] border border-[#DDD6FE] rounded-2xl flex items-center justify-between gap-4">
+      {/* Architecture Highlights Banner */}
+      <div className="p-4 bg-[var(--kazibox-primary-soft,#F3E8FF)] border border-[#DDD6FE] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[var(--kazibox-primary,#6D28D9)] text-white font-black flex items-center justify-center shrink-0">
-            SDK
+          <div className="w-10 h-10 rounded-xl bg-[var(--kazibox-primary,#6D28D9)] text-white font-black flex items-center justify-center text-lg shrink-0">
+            ★
           </div>
           <div>
             <p className="text-sm font-bold text-[#1F2937]">
-              Architecture Ouverte aux Développeurs Tiers
+              {t('catalogue.banner_title')}
             </p>
             <p className="text-xs text-[#6B7280]">
-              Chaque module se branche au noyau commun {platformConfig.platformName} via le package partagé <code className="font-mono bg-white/60 px-1 py-0.5 rounded">@kazibox/sdk</code> et respecte le standard PWA.
+              {t('catalogue.banner_desc')}
             </p>
           </div>
         </div>
+
+        {isOwner && (
+          <Link href="/billing">
+            <Button variant="secondary" size="sm" className="whitespace-nowrap">
+              💳 {t('nav.billing')}
+            </Button>
+          </Link>
+        )}
       </div>
 
-      {/* Modules Grid */}
+      {/* Module Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {previewModules.map((mod) => (
-          <Card key={mod.id} padding="lg" hoverEffect className="flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <Badge variant={mod.isFirst ? 'purple' : 'gray'} size="sm">
-                  {mod.category}
-                </Badge>
-                <Badge variant={mod.isFirst ? 'yellow' : 'gray'} size="sm">
-                  {mod.status}
-                </Badge>
-              </div>
+        {modules.map((mod) => {
+          const modName =
+            typeof mod.name === 'string'
+              ? mod.name
+              : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
 
-              <h3 className="text-xl font-bold text-[#1F2937] mb-2">{mod.name}</h3>
-              <p className="text-sm text-[#6B7280] mb-4 leading-relaxed">{mod.desc}</p>
+          const modTagline =
+            typeof mod.tagline === 'string'
+              ? mod.tagline
+              : mod.tagline?.[language as 'fr' | 'en'] || mod.tagline?.fr || '';
 
-              <div className="space-y-1.5 mb-6">
-                {mod.features.map((f, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-xs text-[#4B5563]">
-                    <span className="text-[var(--kazibox-primary,#6D28D9)] font-bold">✓</span>
-                    <span>{f}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          const isSubscribed =
+            subscription &&
+            (subscription.status === 'active' || subscription.status === 'expiring_soon') &&
+            (subscription.planId === 'all_access' || subscription.includedModuleIds.includes(mod.id));
 
-            <div className="pt-4 border-t border-[#E5E7EB] flex items-center justify-between">
+          const isComingSoon = mod.status === 'coming_soon';
+
+          // Status Badge Determination
+          let badgeVariant: 'green' | 'purple' | 'yellow' | 'gray' = 'purple';
+          let badgeText = t('catalogue.status_available');
+
+          if (isSubscribed) {
+            badgeVariant = 'green';
+            badgeText = t('catalogue.status_active');
+          } else if (isComingSoon) {
+            badgeVariant = 'gray';
+            badgeText = t('catalogue.status_coming_soon');
+          } else if (mod.kind === 'external') {
+            badgeVariant = 'yellow';
+            badgeText = t('catalogue.status_external');
+          }
+
+          const priceStr = mod.pricePerMonth
+            ? `${mod.pricePerMonth.amount.toLocaleString()} ${mod.pricePerMonth.currency} ${t('billing.per_month')}`
+            : t('billing.custom_price');
+
+          return (
+            <Card
+              key={mod.id}
+              padding="lg"
+              hoverEffect
+              className="flex flex-col justify-between border-[#E5E7EB] relative overflow-hidden"
+            >
+              {/* Accent Color Top Border Indicator */}
+              <div
+                className="absolute top-0 left-0 right-0 h-1.5"
+                style={{ backgroundColor: mod.accentColor }}
+              />
+
               <div>
-                <span className="text-xs text-[#9CA3AF] block">Tarif estimé</span>
-                <span className="text-sm font-black text-[#1F2937]">{mod.price}</span>
+                {/* Header Row */}
+                <div className="flex items-start justify-between gap-3 mb-4 mt-1">
+                  <div
+                    className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shadow-sm border border-black/5"
+                    style={{ backgroundColor: `${mod.accentColor}18`, color: mod.accentColor }}
+                  >
+                    {mod.logo}
+                  </div>
+                  <Badge variant={badgeVariant} size="sm">
+                    {badgeText}
+                  </Badge>
+                </div>
+
+                {/* Module Details */}
+                <h3 className="text-xl font-bold text-[#1F2937] mb-1.5 line-clamp-1">
+                  {modName}
+                </h3>
+                <p className="text-xs text-[#6B7280] mb-4 line-clamp-2 leading-relaxed min-h-[32px]">
+                  {modTagline}
+                </p>
+
+                {/* Supported Languages & Category */}
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="text-[11px] font-bold text-[#9CA3AF] uppercase">
+                    {t('catalogue.languages')} :
+                  </span>
+                  <div className="flex gap-1">
+                    {mod.languages?.map((lang) => (
+                      <span
+                        key={lang}
+                        className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-[#F3F4F6] text-[#4B5563]"
+                      >
+                        {lang}
+                      </span>
+                    ))}
+                  </div>
+                  {mod.kind === 'external' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 ml-auto">
+                      SDK Tiers
+                    </span>
+                  )}
+                </div>
               </div>
-              <Button
-                variant={mod.isFirst ? 'secondary' : 'outline'}
-                size="sm"
-                disabled
-              >
-                {mod.isFirst ? 'Bientôt disponible' : 'En développement'}
-              </Button>
-            </div>
-          </Card>
-        ))}
+
+              {/* Footer / Pricing & Actions */}
+              <div className="pt-4 border-t border-[#E5E7EB]">
+                <div className="flex items-baseline justify-between mb-4">
+                  <span className="text-xs text-[#6B7280] font-medium">
+                    {t('catalogue.subscription_price')} :
+                  </span>
+                  <span className="text-sm font-black text-[#1F2937]">
+                    {priceStr}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Link href={`/catalogue/${mod.slug}`} className="w-full">
+                    <Button variant="outline" size="sm" className="w-full text-xs">
+                      {t('catalogue.learn_more')}
+                    </Button>
+                  </Link>
+
+                  {/* Activate button: strictly hidden/disabled for managers and workers */}
+                  {isOwner ? (
+                    isSubscribed ? (
+                      <Link href={`/modules/${mod.slug}`} className="w-full">
+                        <Button variant="secondary" size="sm" className="w-full text-xs font-bold text-[#059669]">
+                          ✓ {t('common.active')}
+                        </Button>
+                      </Link>
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="w-full text-xs font-bold"
+                        disabled={isComingSoon || actionLoading === mod.id}
+                        onClick={() => handleActivate(mod)}
+                      >
+                        {actionLoading === mod.id
+                          ? t('common.loading')
+                          : isComingSoon
+                          ? t('catalogue.coming_soon')
+                          : t('catalogue.activate')}
+                      </Button>
+                    )
+                  ) : (
+                    <Button variant="outline" size="sm" className="w-full text-xs" disabled>
+                      {isSubscribed ? t('common.active') : t('catalogue.view_only')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
