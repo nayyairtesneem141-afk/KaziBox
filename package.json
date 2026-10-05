@@ -1,0 +1,15 @@
+{
+  "name": "kazibox-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "platform",
+    "packages/*",
+    "modules/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=platform",
+    "build": "npm run build --workspace=platform",
+    "start": "npm run start --workspace=platform"
+  }
+}

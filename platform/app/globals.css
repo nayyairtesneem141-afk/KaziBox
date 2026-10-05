@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --kazibox-primary: #6D28D9;
+  --kazibox-primary-hover: #5B21B6;
+  --kazibox-primary-soft: #F3E8FF;
+  --kazibox-accent: #FACC15;
+  --kazibox-text: #1F2937;
+  --kazibox-muted: #6B7280;
+  --kazibox-border: #E5E7EB;
+  --kazibox-bg: #FFFFFF;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--kazibox-bg);
+  color: var(--kazibox-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ensure accessible touch target sizing across the platform */
+button, 
+a, 
+input, 
+select {
+  touch-action: manipulation;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

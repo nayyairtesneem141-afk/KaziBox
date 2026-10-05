@@ -1,0 +1,7 @@
+{
+  "name": "@kazibox/module-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Empty placeholder demo module for KaziBox ecosystem",
+  "main": "index.js"
+}
