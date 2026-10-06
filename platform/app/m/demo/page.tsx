@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import { issueModuleToken, verifyModuleToken, ModuleTokenPayload } from '@/lib/sso';
 
@@ -259,7 +259,7 @@ function DemoModuleContent() {
                 🔒 Abonnement Requis
               </span>
               <p className="text-xs text-rose-900 leading-relaxed">
-                Ce module requiert un abonnement actif sur l’espace <strong>{workspace?.name}</strong>. Les actions d’écritures sont bloquées.
+                Ce module requiert un abonnement actif sur l’espace <strong>{localize(workspace?.name, language)}</strong>. Les actions d’écritures sont bloquées.
               </p>
             </div>
             <Link href="/billing?plan=single&module=demo">
@@ -321,10 +321,10 @@ function DemoModuleContent() {
             {contextData ? (
               <div className="space-y-2 text-xs">
                 <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 text-[#374151] space-y-1 font-medium">
-                  <p><strong>Établissement :</strong> {contextData.workspace?.name}</p>
+                  <p><strong>Établissement :</strong> {localize(contextData.workspace?.name, language)}</p>
                   <p><strong>Modules Actifs :</strong> {contextData.activatedModules?.join(', ') || 'Aucun'}</p>
                   <p><strong>Statut Abonnement :</strong> {subscriptionData?.status || 'Vérifié'}</p>
-                  <p><strong>Module Appelant :</strong> {contextData.callingModule?.name} (v{contextData.callingModule?.version})</p>
+                  <p><strong>Module Appelant :</strong> {localize(contextData.callingModule?.name, language)} (v{contextData.callingModule?.version})</p>
                 </div>
                 <p className="text-[11px] text-[#059669] font-semibold">
                   ✓ Clé d’API validée avec scopes: <code className="font-mono">read:context, write:finance, write:events</code>

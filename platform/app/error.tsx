@@ -10,9 +10,13 @@ export default function GlobalError({
   reset: () => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+  const [currentPath, setCurrentPath] = useState('');
 
   useEffect(() => {
     console.error('KaziBox Global Error Boundary:', error);
+    if (typeof window !== 'undefined') {
+      setCurrentPath(`${window.location.pathname}${window.location.search}`);
+    }
   }, [error]);
 
   const handleClearCacheAndReset = () => {
@@ -41,28 +45,33 @@ export default function GlobalError({
         Une erreur inattendue s'est produite lors du chargement de l'application.
       </p>
 
-      {error?.message && (
-        <div className="max-w-lg w-full mb-6 text-left">
-          <div className="p-4 bg-white rounded-2xl border border-rose-200 shadow-sm text-xs text-rose-900 font-mono overflow-auto max-h-36">
-            <p className="font-bold mb-1">Message d'erreur :</p>
-            <p>{error.message}</p>
-            {error.digest && <p className="text-[10px] text-gray-400 mt-1">Digest: {error.digest}</p>}
+      <div className="max-w-lg w-full mb-6 text-left space-y-2">
+        {currentPath && (
+          <div className="p-3 bg-white rounded-2xl border border-purple-200 shadow-sm text-xs text-[#374151] font-mono flex items-center justify-between">
+            <span className="font-bold text-[#6D28D9]">Page / Route :</span>
+            <code className="text-[#6D28D9] font-bold truncate max-w-[320px]">{currentPath}</code>
           </div>
+        )}
 
-          <button
-            onClick={() => setShowDetails(!showDetails)}
-            className="text-[11px] text-purple-700 font-bold hover:underline mt-2 inline-block"
-          >
-            {showDetails ? 'Masquer la pile technique' : 'Afficher les détails techniques (stack trace)'}
-          </button>
-
-          {showDetails && error.stack && (
-            <pre className="mt-2 p-3 bg-gray-900 text-gray-200 rounded-xl text-[10px] font-mono overflow-auto max-h-48 text-left">
-              {error.stack}
-            </pre>
-          )}
+        <div className="p-4 bg-white rounded-2xl border border-rose-200 shadow-sm text-xs text-rose-900 font-mono overflow-auto max-h-36">
+          <p className="font-bold mb-1">Message d'erreur :</p>
+          <p>{error?.message || 'Erreur inattendue'}</p>
+          {error?.digest && <p className="text-[10px] text-gray-400 mt-1">Digest: {error.digest}</p>}
         </div>
-      )}
+
+        <button
+          onClick={() => setShowDetails(!showDetails)}
+          className="text-[11px] text-purple-700 font-bold hover:underline mt-1 inline-block"
+        >
+          {showDetails ? 'Masquer la pile technique' : 'Afficher les détails techniques (stack trace)'}
+        </button>
+
+        {showDetails && error?.stack && (
+          <pre className="mt-2 p-3 bg-gray-900 text-gray-200 rounded-xl text-[10px] font-mono overflow-auto max-h-48 text-left">
+            {error.stack}
+          </pre>
+        )}
+      </div>
 
       <div className="flex flex-col sm:flex-row items-center gap-3">
         <button

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize, localizeArray } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
 import { getModule } from '@/lib/modules';
 import { RequireAccess } from '../../components/RequireAccess';
@@ -27,11 +27,15 @@ export default function ModuleShellPage() {
     async function load() {
       if (!slug) return;
       const mod = await getModule(slug);
+      if (mod?.entryUrl && mod.entryUrl !== `/modules/${mod.slug}` && !mod.entryUrl.startsWith(`/modules/${mod.slug}`)) {
+        router.replace(mod.entryUrl);
+        return;
+      }
       setModuleData(mod);
       setLoading(false);
     }
     load();
-  }, [slug]);
+  }, [slug, router]);
 
   if (loading) {
     return (
@@ -52,19 +56,9 @@ export default function ModuleShellPage() {
     );
   }
 
-  const moduleName =
-    typeof moduleData.name === 'string'
-      ? moduleData.name
-      : moduleData.name?.[language as 'fr' | 'en'] || moduleData.name?.fr || moduleData.id;
-
-  const moduleTagline =
-    typeof moduleData.tagline === 'string'
-      ? moduleData.tagline
-      : moduleData.tagline?.[language as 'fr' | 'en'] || moduleData.tagline?.fr || '';
-
-  const features = Array.isArray(moduleData.features)
-    ? moduleData.features
-    : moduleData.features?.[language as 'fr' | 'en'] || moduleData.features?.fr || [];
+  const moduleName = localize(moduleData.name, language) || moduleData.id;
+  const moduleTagline = localize(moduleData.tagline, language);
+  const features = localizeArray(moduleData.features, language);
 
   return (
     <RequireAccess moduleId={moduleData.id}>
@@ -124,10 +118,7 @@ export default function ModuleShellPage() {
               {t('common.actions')} :
             </span>
             {moduleData.menuItems?.map((item, idx) => {
-              const label =
-                typeof item.label === 'string'
-                  ? item.label
-                  : item.label?.[language as 'fr' | 'en'] || item.label?.fr || '';
+              const label = localize(item.label, language);
               return (
                 <button
                   key={idx}

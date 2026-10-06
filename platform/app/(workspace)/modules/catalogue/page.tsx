@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
 import { getModules, activateModule } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
@@ -52,7 +52,7 @@ export default function ModuleCataloguePage() {
       await activateModule(workspace.company_id, mod.id);
       await loadData();
       setActionLoading(null);
-      router.push(`/modules/${mod.slug}`);
+      router.push(mod.entryUrl || `/modules/${mod.slug}`);
     } else {
       // Redirect to centralized billing plan selection with module preselected
       router.push(`/billing?plan=single&module=${mod.id}`);
@@ -120,15 +120,8 @@ export default function ModuleCataloguePage() {
       {/* Module Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {modules.map((mod) => {
-          const modName =
-            typeof mod.name === 'string'
-              ? mod.name
-              : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
-
-          const modTagline =
-            typeof mod.tagline === 'string'
-              ? mod.tagline
-              : mod.tagline?.[language as 'fr' | 'en'] || mod.tagline?.fr || '';
+          const modName = localize(mod.name, language) || mod.id;
+          const modTagline = localize(mod.tagline, language);
 
           const isSubscribed =
             subscription &&
@@ -235,7 +228,7 @@ export default function ModuleCataloguePage() {
                   {/* Activate button: strictly hidden/disabled for managers and workers */}
                   {isOwner ? (
                     isSubscribed ? (
-                      <Link href={`/modules/${mod.slug}`} className="w-full">
+                      <Link href={mod.entryUrl || `/modules/${mod.slug}`} className="w-full">
                         <Button variant="secondary" size="sm" className="w-full text-xs font-bold text-[#059669]">
                           ✓ {t('common.active')}
                         </Button>

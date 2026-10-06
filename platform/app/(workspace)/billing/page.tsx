@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, Button, Badge, Input, Select } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import {
   getPlans,
@@ -332,9 +332,7 @@ function BillingPageContent() {
                         <span className="text-xl">{mod.logo}</span>
                         <div className="truncate">
                           <p className="text-xs font-bold text-[#1F2937] truncate">
-                            {typeof mod.name === 'string'
-                              ? mod.name
-                              : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr}
+                            {localize(mod.name, language)}
                           </p>
                           <span className="text-[10px] text-[#059669] font-semibold">
                             ✓ {t('billing.included')}
@@ -406,7 +404,7 @@ function BillingPageContent() {
                         {new Date(row.date).toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US')}
                       </td>
                       <td className="py-3 px-2 font-medium text-[#1F2937]">
-                        {row.planName}
+                        {localize(row.planName, language)}
                       </td>
                       <td className="py-3 px-2 text-[#4B5563]">
                         <span className="font-semibold">{row.operator}</span>
@@ -532,15 +530,8 @@ function BillingPageContent() {
               {/* 4 Plans Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {plans.map((p) => {
-                  const planName =
-                    typeof p.name === 'string'
-                      ? p.name
-                      : p.name?.[language as 'fr' | 'en'] || p.name?.fr || p.id;
-
-                  const planDesc =
-                    typeof p.description === 'string'
-                      ? p.description
-                      : p.description?.[language as 'fr' | 'en'] || p.description?.fr || '';
+                  const planName = localize(p.name, language) || p.id;
+                  const planDesc = localize(p.description, language);
 
                   const isSelected = selectedPlanId === p.id;
                   const price =
@@ -565,7 +556,7 @@ function BillingPageContent() {
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-black uppercase text-[#6B7280]">
-                            {typeof p.badge === 'string' ? p.badge : p.badge?.fr}
+                            {localize(p.badge, language)}
                           </span>
                           {p.isPopular && (
                             <Badge variant="yellow" size="sm">
@@ -593,10 +584,7 @@ function BillingPageContent() {
                         {/* Features bullet list */}
                         <div className="space-y-1.5 text-xs text-[#4B5563] pt-3 border-t border-[#E5E7EB]">
                           {p.features.map((feat, idx) => {
-                            const featStr =
-                              typeof feat === 'string'
-                                ? feat
-                                : feat?.[language as 'fr' | 'en'] || feat?.fr;
+                            const featStr = localize(feat, language);
                             return (
                               <div key={idx} className="flex items-center gap-1.5">
                                 <span className="text-[var(--kazibox-primary,#6D28D9)] font-bold">✓</span>
@@ -672,9 +660,7 @@ function BillingPageContent() {
                           <span className="text-2xl">{m.logo}</span>
                           <div className="truncate">
                             <p className="text-xs font-bold text-[#1F2937] truncate">
-                              {typeof m.name === 'string'
-                                ? m.name
-                                : m.name?.[language as 'fr' | 'en'] || m.name?.fr}
+                              {localize(m.name, language)}
                             </p>
                             <span className="text-[10px] text-[#6B7280]">
                               {m.pricePerMonth?.amount.toLocaleString()} {m.pricePerMonth?.currency}/mois

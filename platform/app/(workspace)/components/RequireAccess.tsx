@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/useSession';
 import { hasModuleAccess, getModule } from '@/lib/modules';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { ModuleManifest } from '@kazibox/sdk';
 
@@ -21,7 +21,7 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
 }) => {
   const router = useRouter();
   const { workspace, user } = useSession();
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
 
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
@@ -77,10 +77,7 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
     return <>{children}</>;
   }
 
-  const moduleName =
-    typeof moduleData?.name === 'string'
-      ? moduleData.name
-      : moduleData?.name?.fr || moduleId;
+  const moduleName = localize(moduleData?.name, language) || moduleId;
 
   return (
     <div className="max-w-xl mx-auto my-12 px-4">

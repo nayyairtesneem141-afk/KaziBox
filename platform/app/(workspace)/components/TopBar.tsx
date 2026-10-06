@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Avatar, Badge, Button } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { usePwa } from '@/lib/pwa';
 import { platformConfig } from '@/config';
 import { getNotifications, markAllNotificationsAsRead, markNotificationAsRead } from '@/lib/notifications';
@@ -264,10 +264,10 @@ export const TopBar: React.FC = () => {
                         />
                         <div className="flex-1">
                           <p className="text-sm font-bold text-[#1F2937] leading-snug">
-                            {n.title}
+                            {localize(n.title, language)}
                           </p>
                           <p className="text-xs text-[#6B7280] mt-1 leading-relaxed">
-                            {n.message}
+                            {localize(n.message, language)}
                           </p>
                         </div>
                       </div>

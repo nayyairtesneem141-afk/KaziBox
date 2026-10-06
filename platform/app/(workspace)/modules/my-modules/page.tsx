@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card, Button, Badge, Modal } from '@kazibox/ui';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
 import { getModules, deactivateModule } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
@@ -150,15 +150,8 @@ export default function MyModulesPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {modules.map((mod) => {
-            const modName =
-              typeof mod.name === 'string'
-                ? mod.name
-                : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
-
-            const modTagline =
-              typeof mod.tagline === 'string'
-                ? mod.tagline
-                : mod.tagline?.[language as 'fr' | 'en'] || mod.tagline?.fr || '';
+            const modName = localize(mod.name, language) || mod.id;
+            const modTagline = localize(mod.tagline, language);
 
             const subStatus = subscription?.status || 'active';
             const statusBadgeVariant =
@@ -200,7 +193,7 @@ export default function MyModulesPage() {
                 {/* Right: Actions */}
                 <div className="flex items-center flex-wrap gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-[#E5E7EB]">
                   {/* Open Button: available to everyone */}
-                  <Link href={`/modules/${mod.slug}`}>
+                  <Link href={mod.entryUrl || `/modules/${mod.slug}`}>
                     <Button variant="primary" size="sm" className="font-bold min-h-[40px]">
                       🚀 {t('my_modules.open_button')}
                     </Button>
@@ -254,10 +247,7 @@ export default function MyModulesPage() {
 
             <p className="text-sm text-[#4B5563]">
               {t('my_modules.deactivate_confirm_text', {
-                moduleName:
-                  typeof deactivatingModule.name === 'string'
-                    ? deactivatingModule.name
-                    : deactivatingModule.name?.[language as 'fr' | 'en'] || deactivatingModule.name?.fr || '',
+                moduleName: localize(deactivatingModule.name, language),
               })}
             </p>
 

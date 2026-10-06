@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import { getModules, getModuleSummaries } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
@@ -207,9 +207,7 @@ export default function ConsolidatedDashboardPage() {
                 </span>
                 <div>
                   <h3 className="font-extrabold text-[#1F2937] text-base">
-                    {typeof primaryModule.name === 'string'
-                      ? primaryModule.name
-                      : primaryModule.name?.[language as 'fr' | 'en'] || primaryModule.name?.fr}
+                    {localize(primaryModule.name, language)}
                   </h3>
                   <span className="text-xs text-[#6B7280]">
                     v{primaryModule.version} &bull; Prêt pour vos opérations quotidiennes
@@ -289,7 +287,7 @@ export default function ConsolidatedDashboardPage() {
                     : 'text-[#6B7280] hover:text-[#1F2937] hover:bg-white/70'
                 }`}
               >
-                {item.label}
+                {localize(item.label, language)}
               </button>
             ))}
           </div>
@@ -549,7 +547,7 @@ export default function ConsolidatedDashboardPage() {
           <div className="flex items-center justify-between text-[11px] font-semibold text-[#6B7280] px-2 pt-2 border-t border-slate-200/80">
             {chartData.map((d, i) => (
               <span key={i} className="text-center truncate px-1">
-                {d.label}
+                {localize(d.label, language)}
               </span>
             ))}
           </div>
@@ -582,10 +580,7 @@ export default function ConsolidatedDashboardPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {activeModules.map((mod) => {
-              const modName =
-                typeof mod.name === 'string'
-                  ? mod.name
-                  : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
+              const modName = localize(mod.name, language) || mod.id;
 
               // Find matching finance breakdown
               const fin = moduleBreakdowns.find((b) => b.moduleId === mod.id);
@@ -672,7 +667,7 @@ export default function ConsolidatedDashboardPage() {
                             className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-white border border-[#E5E7EB]"
                           >
                             <span className="text-[#6B7280]">
-                              {m.label?.[language as 'fr' | 'en'] || m.label?.fr}
+                              {localize(m.label, language)}
                             </span>
                             <span className="font-bold text-[#1F2937]">{m.value}</span>
                           </div>

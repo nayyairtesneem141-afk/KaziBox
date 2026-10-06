@@ -12,16 +12,85 @@ const translations: Record<Language, any> = {
   en,
 };
 
+/**
+ * Safely resolves a bilingual { en, fr } object or plain string to a displayable string.
+ * - If value is null/undefined, returns defaultValue or ''
+ * - If value is already a string, returns value unchanged
+ * - If value is a number or boolean, returns String(value)
+ * - If value is an object with { en, fr }, returns the string for current language,
+ *   falls back to the other language if missing, or first available string.
+ * - Prevents Minified React error #31 (objects are not valid as a React child).
+ */
+export function localize(
+  value: any,
+  language: string = 'fr',
+  defaultValue: string = ''
+): string {
+  if (value === null || value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object') {
+    const lang = (language === 'en' ? 'en' : 'fr') as 'en' | 'fr';
+    const altLang = lang === 'en' ? 'fr' : 'en';
+
+    if (value[lang] !== undefined && value[lang] !== null) {
+      if (typeof value[lang] === 'string') return value[lang];
+      return String(value[lang]);
+    }
+    if (value[altLang] !== undefined && value[altLang] !== null) {
+      if (typeof value[altLang] === 'string') return value[altLang];
+      return String(value[altLang]);
+    }
+    // Search for any string property in the object
+    for (const k of Object.keys(value)) {
+      if (typeof value[k] === 'string') {
+        return value[k];
+      }
+    }
+  }
+  return defaultValue;
+}
+
+/**
+ * Safely resolves an array of bilingual items or a bilingual object of arrays into string[]
+ */
+export function localizeArray(
+  value: any,
+  language: string = 'fr'
+): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((item) => localize(item, language));
+  }
+  if (typeof value === 'object') {
+    const lang = language === 'en' ? 'en' : 'fr';
+    const altLang = lang === 'en' ? 'fr' : 'en';
+    const list = value[lang] || value[altLang] || [];
+    if (Array.isArray(list)) {
+      return list.map((item) => localize(item, language));
+    }
+  }
+  return [];
+}
+
 interface I18nContextType {
   language: Language;
   setLanguage: (lang: Language) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
+  localize: (value: any, defaultValue?: string) => string;
 }
 
 const I18nContext = createContext<I18nContextType>({
   language: platformConfig.defaultLanguage as Language,
   setLanguage: () => {},
   t: (key) => key,
+  localize: (value) => localize(value, 'fr'),
 });
 
 export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -108,8 +177,15 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [language]
   );
 
+  const localizer = useCallback(
+    (value: any, defaultValue: string = '') => {
+      return localize(value, language, defaultValue);
+    },
+    [language]
+  );
+
   return (
-    <I18nContext.Provider value={{ language, setLanguage, t }}>
+    <I18nContext.Provider value={{ language, setLanguage, t, localize: localizer }}>
       {children}
     </I18nContext.Provider>
   );

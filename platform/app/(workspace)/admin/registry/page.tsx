@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { getModules } from '@/lib/modules';
 import { updateModuleStatus, runPwaChecks } from '@/lib/registry';
 import { ModuleManifest } from '@kazibox/sdk';
@@ -126,10 +126,7 @@ export default function AdminRegistryPage() {
             </thead>
             <tbody className="divide-y divide-[#F3F4F6]">
               {modules.map((mod) => {
-                const modName =
-                  typeof mod.name === 'string'
-                    ? mod.name
-                    : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
+                const modName = localize(mod.name, language) || mod.id;
 
                 const pwaStatus = runPwaChecks(mod);
 

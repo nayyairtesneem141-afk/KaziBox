@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, Button, Badge, Input } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { getModule } from '@/lib/modules';
 import {
   runPwaChecks,
@@ -125,10 +125,7 @@ export default function ModuleRegistryDetailPage() {
     }
   };
 
-  const modName =
-    typeof moduleData.name === 'string'
-      ? moduleData.name
-      : moduleData.name?.[language as 'fr' | 'en'] || moduleData.name?.fr || moduleData.id;
+  const modName = localize(moduleData.name, language) || moduleData.id;
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-16">
@@ -276,7 +273,7 @@ export default function ModuleRegistryDetailPage() {
                 </span>
                 <div>
                   <p className="text-xs sm:text-sm font-bold text-[#1F2937]">
-                    {typeof chk.label === 'string' ? chk.label : chk.label.fr}
+                    {localize(chk.label, language)}
                   </p>
                   <p className="text-[11px] text-[#6B7280] mt-0.5">
                     {chk.details}

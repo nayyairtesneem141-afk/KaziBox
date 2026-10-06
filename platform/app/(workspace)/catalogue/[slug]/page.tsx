@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize, localizeArray } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
 import { getModule, activateModule } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
@@ -62,24 +62,10 @@ export default function ModulePresentationPage() {
     );
   }
 
-  const moduleName =
-    typeof moduleData.name === 'string'
-      ? moduleData.name
-      : moduleData.name?.[language as 'fr' | 'en'] || moduleData.name?.fr || moduleData.id;
-
-  const moduleTagline =
-    typeof moduleData.tagline === 'string'
-      ? moduleData.tagline
-      : moduleData.tagline?.[language as 'fr' | 'en'] || moduleData.tagline?.fr || '';
-
-  const moduleDescription =
-    typeof moduleData.description === 'string'
-      ? moduleData.description
-      : moduleData.description?.[language as 'fr' | 'en'] || moduleData.description?.fr || moduleTagline;
-
-  const features = Array.isArray(moduleData.features)
-    ? moduleData.features
-    : moduleData.features?.[language as 'fr' | 'en'] || moduleData.features?.fr || [];
+  const moduleName = localize(moduleData.name, language) || moduleData.id;
+  const moduleTagline = localize(moduleData.tagline, language);
+  const moduleDescription = localize(moduleData.description, language) || moduleTagline;
+  const features = localizeArray(moduleData.features, language);
 
   const isSubscribed =
     subscription &&
@@ -96,7 +82,7 @@ export default function ModulePresentationPage() {
     if (!workspace || !isOwner) return;
 
     if (isSubscribed) {
-      router.push(`/modules/${moduleData.slug}`);
+      router.push(moduleData.entryUrl || `/modules/${moduleData.slug}`);
       return;
     }
 
@@ -110,7 +96,7 @@ export default function ModulePresentationPage() {
       setActivating(true);
       await activateModule(workspace.company_id, moduleData.id);
       setActivating(false);
-      router.push(`/modules/${moduleData.slug}`);
+      router.push(moduleData.entryUrl || `/modules/${moduleData.slug}`);
     } else {
       // Redirect to plan selection with module preselected
       router.push(`/billing?plan=single&module=${moduleData.id}`);
@@ -215,7 +201,7 @@ export default function ModulePresentationPage() {
 
             {isOwner ? (
               isSubscribed ? (
-                <Link href={`/modules/${moduleData.slug}`}>
+                <Link href={moduleData.entryUrl || `/modules/${moduleData.slug}`}>
                   <Button variant="secondary" size="lg" className="w-full font-bold">
                     🚀 {t('catalogue.open_module')}
                   </Button>
@@ -276,7 +262,7 @@ export default function ModulePresentationPage() {
                     ✓
                   </div>
                   <span className="text-sm font-medium text-[#1F2937]">
-                    {feat}
+                    {localize(feat, language)}
                   </span>
                 </div>
               ))}

@@ -96,11 +96,12 @@ export async function POST(req: NextRequest) {
 
   // Optional: create in-app notification if event is notable
   const store = getStore();
+  const modDisplayName = typeof auth!.module.name === 'string' ? auth!.module.name : (auth!.module.name?.fr || auth!.module.name?.en || auth!.module.id);
   store.notifications.unshift({
     id: `notif-evt-${Date.now()}`,
     company_id: auth!.workspaceId,
     type: 'module_event' as any,
-    title: `Événement ${auth!.module.name}: ${data.action}`,
+    title: `Événement ${modDisplayName}: ${data.action}`,
     message: `${data.entity} #${data.entityId} mis à jour.`,
     read: false,
     created_at: new Date().toISOString(),

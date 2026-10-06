@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import { getModules } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
@@ -163,7 +163,7 @@ export const Sidebar: React.FC = () => {
                   >
                     {item.icon}
                   </span>
-                  <span>{item.label}</span>
+                  <span>{localize(item.label, language)}</span>
                 </Link>
               );
             })}
@@ -183,10 +183,7 @@ export const Sidebar: React.FC = () => {
 
             <div className="space-y-1 mt-1">
               {activeModules.map((mod) => {
-                const modName =
-                  typeof mod.name === 'string'
-                    ? mod.name
-                    : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
+                const modName = localize(mod.name, language) || mod.id;
 
                 const ssoToken = user && workspace ? issueModuleToken(user, workspace, mod.id, language) : '';
                 const baseHref = mod.entryUrl || `/modules/${mod.slug}`;

@@ -826,6 +826,10 @@ const STORAGE_KEYS = {
   CURRENT_SESSION: 'kazibox_current_session',
 };
 
+// Storage versioning to invalidate stale localStorage data across releases
+const STORE_VERSION = 'v3.3.0';
+const STORE_VERSION_KEY = 'kazibox_db_schema_version';
+
 export const getStore = () => {
   if (typeof window === 'undefined') {
     return {
@@ -839,6 +843,20 @@ export const getStore = () => {
       apiKeys: [...INITIAL_API_KEYS],
     };
   }
+
+  // Version check and migration: automatically clear old mock collections when version changes
+  try {
+    const savedVer = localStorage.getItem(STORE_VERSION_KEY);
+    if (savedVer !== STORE_VERSION) {
+      // Invalidate old collections so fresh module registry & subscriptions take effect
+      Object.values(STORAGE_KEYS).forEach((k) => {
+        if (k !== STORAGE_KEYS.CURRENT_SESSION) {
+          localStorage.removeItem(k);
+        }
+      });
+      localStorage.setItem(STORE_VERSION_KEY, STORE_VERSION);
+    }
+  } catch {}
 
   const getOrSet = <T>(key: string, initial: T): T => {
     try {

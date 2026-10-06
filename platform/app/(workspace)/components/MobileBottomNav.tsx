@@ -4,12 +4,12 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from '@/lib/useSession';
-import { useTranslation } from '@/lib/i18n';
+import { useTranslation, localize } from '@/lib/i18n';
 
 export const MobileBottomNav: React.FC = () => {
   const pathname = usePathname();
   const { user } = useSession();
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
 
   const role = user?.role || 'worker';
   const isWorker = role === 'worker';
@@ -84,7 +84,7 @@ export const MobileBottomNav: React.FC = () => {
                 {item.icon}
               </div>
               <span className="text-[11px] mt-0.5 tracking-tight truncate max-w-[70px]">
-                {item.label}
+                {localize(item.label, language)}
               </span>
             </Link>
           );
