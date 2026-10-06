@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, Button, Badge, Input, Select } from '@kazibox/ui';
@@ -16,7 +16,7 @@ import {
 import { getModules } from '@/lib/modules';
 import { Plan, Subscription, PaymentHistoryItem, ModuleManifest } from '@kazibox/sdk';
 
-export default function BillingPage() {
+function BillingPageContent() {
   const searchParams = useSearchParams();
   const preselectedModule = searchParams.get('module');
   const requestedAction = searchParams.get('action'); // 'renew' | 'upgrade'
@@ -872,3 +872,19 @@ export default function BillingPage() {
     </div>
   );
 }
+
+export default function BillingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-12 flex flex-col items-center justify-center">
+          <div className="w-10 h-10 border-4 border-[#6D28D9] border-t-transparent rounded-full animate-spin mb-4" />
+          <p className="text-sm font-medium text-[#6B7280]">Chargement de la facturation...</p>
+        </div>
+      }
+    >
+      <BillingPageContent />
+    </Suspense>
+  );
+}
+

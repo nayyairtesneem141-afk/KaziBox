@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { Suspense } from 'react';
 import Link from 'next/link';
 import { Card, Button } from '@kazibox/ui';
 import { RequireAccess } from '../../components/RequireAccess';
@@ -8,7 +8,7 @@ import { useTranslation } from '@/lib/i18n';
 
 import { useSearchParams } from 'next/navigation';
 
-export default function WorkspaceDemoModuleShell() {
+function WorkspaceDemoModuleContent() {
   const { t } = useTranslation();
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
@@ -43,3 +43,18 @@ export default function WorkspaceDemoModuleShell() {
     </RequireAccess>
   );
 }
+
+export default function WorkspaceDemoModuleShell() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 flex items-center justify-center">
+          <div className="w-8 h-8 border-4 border-[#6D28D9] border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <WorkspaceDemoModuleContent />
+    </Suspense>
+  );
+}
+

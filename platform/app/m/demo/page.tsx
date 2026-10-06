@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, Button, Badge } from '@kazibox/ui';
@@ -9,7 +9,7 @@ import { useTranslation } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import { issueModuleToken, verifyModuleToken, ModuleTokenPayload } from '@/lib/sso';
 
-export default function DemoModulePage() {
+function DemoModuleContent() {
   const searchParams = useSearchParams();
   const urlToken = searchParams.get('token');
 
@@ -421,3 +421,18 @@ export default function DemoModulePage() {
     </div>
   );
 }
+
+export default function DemoModulePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="w-10 h-10 border-4 border-purple-600 border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <DemoModuleContent />
+    </Suspense>
+  );
+}
+
