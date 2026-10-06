@@ -1,5 +1,8 @@
 import { ModuleManifest, PwaCheckResult, PwaCheckItem } from '@kazibox/sdk';
 import { getStore, setStoreItem, StoredApiKey } from './storage';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 /**
  * PWA Compliance Checklist Validator
@@ -101,14 +104,13 @@ export function runPwaChecks(manifest: ModuleManifest): PwaCheckResult {
  * Generate API Key for Module Integration
  * Secret is shown ONCE to caller, then stored only as hash and prefix
  */
-export async function createApiKey(moduleId: string): Promise<{
+export async function createApiKey(moduleId: string, companyId?: string): Promise<{
   keyId: string;
   secret: string;
   prefix: string;
   createdAt: string;
 }> {
   await new Promise((r) => setTimeout(r, 200));
-  const store = getStore();
 
   const randomBytes = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
   const prefix = `kz_live_${randomBytes.substring(0, 6)}`;
@@ -116,6 +118,33 @@ export async function createApiKey(moduleId: string): Promise<{
   const b64 = typeof Buffer !== 'undefined' ? Buffer.from(secret).toString('base64') : (typeof btoa !== 'undefined' ? btoa(secret) : secret);
   const hashedSecret = `sha256_mock_${b64.substring(0, 16)}`;
 
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      const targetCompany = companyId || '11111111-1111-4111-8111-111111111111';
+      const { data, error } = await supabase
+        .from('module_api_keys')
+        .insert({
+          company_id: targetCompany,
+          module_id: moduleId,
+          key_prefix: `${prefix}...`,
+          key_hash: hashedSecret,
+        })
+        .select()
+        .single();
+
+      if (data && !error) {
+        return {
+          keyId: data.id,
+          secret,
+          prefix: data.key_prefix,
+          createdAt: data.created_at,
+        };
+      }
+    }
+  }
+
+  const store = getStore();
   const keyRecord: StoredApiKey = {
     id: `key-${Date.now()}`,
     moduleId,
@@ -138,7 +167,27 @@ export async function createApiKey(moduleId: string): Promise<{
 /**
  * Fetch API keys for a module (only shows prefixes)
  */
-export async function getApiKeysForModule(moduleId: string): Promise<StoredApiKey[]> {
+export async function getApiKeysForModule(moduleId: string, companyId?: string): Promise<StoredApiKey[]> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      let query = supabase.from('module_api_keys').select('*').eq('module_id', moduleId);
+      if (companyId) {
+        query = query.eq('company_id', companyId);
+      }
+      const { data } = await query;
+      if (data && data.length > 0) {
+        return data.map((k: any) => ({
+          id: k.id,
+          moduleId: k.module_id,
+          prefix: k.key_prefix,
+          hashedSecret: k.key_hash,
+          createdAt: k.created_at,
+        }));
+      }
+    }
+  }
+
   const store = getStore();
   return store.apiKeys.filter((k) => k.moduleId === moduleId);
 }
@@ -173,6 +222,16 @@ export async function updateModuleStatus(
         success: false,
         error: `Impossible de publier : critères PWA non validés (${failedChecks})`,
       };
+    }
+  }
+
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      await supabase
+        .from('modules')
+        .update({ status: status === 'published' ? 'active' : status as any })
+        .eq('id', moduleId);
     }
   }
 
@@ -211,8 +270,19 @@ export async function updateModuleManifest(
     id: moduleId, // ID immutable
   };
 
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      await supabase
+        .from('modules')
+        .update({ manifest: merged as any })
+        .eq('id', moduleId);
+    }
+  }
+
   store.modules[idx] = merged;
   setStoreItem('MODULES', store.modules);
 
   return { success: true, module: merged };
 }
+

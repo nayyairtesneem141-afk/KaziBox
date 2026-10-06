@@ -2,6 +2,9 @@ import { Plan, Subscription, PaymentHistoryItem } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
 import { notifySubscriptionActivated, notifyPaymentFailed } from './notifications';
 import { dispatchWebhookEvent } from './webhooks';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 export const PLANS: Plan[] = [
   {
@@ -107,7 +110,6 @@ export const PLANS: Plan[] = [
 
 /**
  * Fetch all available platform billing plans
- * In Supabase: const { data } = await supabase.from('plans').select('*');
  */
 export async function getPlans(): Promise<Plan[]> {
   return PLANS;
@@ -115,9 +117,37 @@ export async function getPlans(): Promise<Plan[]> {
 
 /**
  * Fetch active or latest subscription for current workspace
- * In Supabase: const { data } = await supabase.from('subscriptions').select('*').eq('company_id', companyId).order('created_at', { ascending: false }).limit(1).single();
  */
 export async function getSubscription(companyId: string): Promise<Subscription | null> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+        .maybeSingle();
+
+      if (data) {
+        return {
+          id: data.id,
+          companyId: data.company_id,
+          planId: data.plan_id,
+          status: data.status as Subscription['status'],
+          billingCycle: 'monthly',
+          includedModuleIds: Array.isArray(data.included_module_ids) ? (data.included_module_ids as string[]) : [],
+          currentPeriodStart: data.current_period_start,
+          currentPeriodEnd: data.current_period_end || undefined,
+          renewAt: data.current_period_end || undefined,
+          autoRenew: !data.cancel_at_period_end,
+          amount: 29000,
+          currency: 'XOF',
+        };
+      }
+    }
+  }
+
   const store = getStore();
   const sub = store.subscriptions.find((s) => s.companyId === companyId);
   return sub || null;
@@ -141,7 +171,6 @@ export interface CheckoutParams {
 
 /**
  * Start checkout stub for centralized billing
- * Simulates mobile money push (pawaPay) or card charge (Stripe/Paystack)
  */
 export async function startCheckout(params: CheckoutParams): Promise<{
   success: boolean;
@@ -149,46 +178,9 @@ export async function startCheckout(params: CheckoutParams): Promise<{
   invoiceId?: string;
   error?: string;
 }> {
-  // Simulate payment gateway delay (e.g. mobile money USSD prompt)
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
-  // =========================================================================
-  // INTEGRATION POINTS FOR REAL PAYMENT GATEWAYS:
-  // =========================================================================
-  if (params.paymentMethod === 'mobile_money') {
-    // TODO: Connect pawaPay Mobile Money API here (POST /v1/charges)
-    // Payload contract:
-    // {
-    //   depositId: `dep_${Date.now()}`,
-    //   amount: params.amount.toString(),
-    //   currency: params.currency || 'XOF',
-    //   correspondent: params.operator, // e.g., 'ORANGE_CIV', 'MTN_CIV', 'WAVE_CIV'
-    //   payer: { msisdn: params.phoneNumber?.replace(/\D/g, '') },
-    //   customerTimestamp: new Date().toISOString()
-    // }
-    console.log('[MOCK GATEWAY] pawaPay charge submitted:', {
-      operator: params.operator,
-      phone: params.phoneNumber,
-      amount: params.amount,
-    });
-  } else {
-    // TODO: Connect Card provider (Stripe / Paystack) here
-    // Payload contract:
-    // await stripe.paymentIntents.create({
-    //   amount: params.amount * 100,
-    //   currency: (params.currency || 'XOF').toLowerCase(),
-    //   payment_method_data: { type: 'card', ... }
-    // });
-    console.log('[MOCK GATEWAY] Card provider charge submitted:', {
-      last4: params.cardNumber?.slice(-4),
-      amount: params.amount,
-    });
-  }
-  // =========================================================================
-
-  const store = getStore();
   const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-
   const now = new Date();
   const nextPeriod = new Date(now);
   if (params.billingCycle === 'yearly') {
@@ -212,7 +204,34 @@ export async function startCheckout(params: CheckoutParams): Promise<{
     currency: params.currency || 'XOF',
   };
 
-  // Upsert subscription in persistent mock store
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      // Upsert subscription
+      await supabase.from('subscriptions').insert({
+        company_id: params.companyId,
+        plan_id: params.planId,
+        status: 'active',
+        current_period_start: now.toISOString(),
+        current_period_end: nextPeriod.toISOString(),
+        cancel_at_period_end: false,
+        included_module_ids: params.moduleIds,
+      });
+
+      // Insert payment history
+      await supabase.from('payment_history').insert({
+        company_id: params.companyId,
+        amount: params.amount,
+        currency: params.currency || 'XOF',
+        status: 'paid',
+        description: `Formule ${params.planId} (${params.billingCycle})`,
+        invoice_url: '#',
+      });
+    }
+  }
+
+  // Also update local store
+  const store = getStore();
   const existingIdx = store.subscriptions.findIndex((s) => s.companyId === params.companyId);
   if (existingIdx !== -1) {
     store.subscriptions[existingIdx] = updatedSubscription;
@@ -221,7 +240,6 @@ export async function startCheckout(params: CheckoutParams): Promise<{
   }
   setStoreItem('SUBSCRIPTIONS', store.subscriptions);
 
-  // Add payment history record
   const planObj = PLANS.find((p) => p.id === params.planId);
   const planTitle = typeof planObj?.name === 'string' ? planObj.name : planObj?.name?.fr || params.planId;
 
@@ -243,10 +261,8 @@ export async function startCheckout(params: CheckoutParams): Promise<{
   store.payments.unshift(newPayment);
   setStoreItem('PAYMENTS', store.payments);
 
-  // Trigger in-app notification
   await notifySubscriptionActivated(params.companyId, planTitle);
 
-  // Dispatch webhook event to all subscribed modules
   for (const modId of params.moduleIds) {
     await dispatchWebhookEvent(
       'subscription.activated',
@@ -269,9 +285,36 @@ export async function startCheckout(params: CheckoutParams): Promise<{
 
 /**
  * Fetch billing payment history
- * In Supabase: const { data } = await supabase.from('payments').select('*').eq('company_id', companyId).order('date', { ascending: false });
  */
 export async function getPaymentHistory(companyId: string): Promise<PaymentHistoryItem[]> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase
+        .from('payment_history')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (data && data.length > 0) {
+        return data.map((p: any) => ({
+          id: p.id,
+          invoiceNumber: `INV-${p.id.slice(0, 8).toUpperCase()}`,
+          companyId: p.company_id,
+          date: p.created_at,
+          amount: p.amount,
+          currency: p.currency,
+          planName: p.description,
+          moduleCount: 1,
+          paymentMethod: 'mobile_money',
+          operator: 'Mobile Money',
+          status: p.status as PaymentHistoryItem['status'],
+          receiptUrl: p.invoice_url || '#',
+        }));
+      }
+    }
+  }
+
   const store = getStore();
   return store.payments
     .filter((p) => p.companyId === companyId || !p.companyId || companyId === 'ws-palmeraie-01')
@@ -279,9 +322,19 @@ export async function getPaymentHistory(companyId: string): Promise<PaymentHisto
 }
 
 /**
- * Marks a subscription as expired and dispatches the subscription.expired webhook
+ * Marks a subscription as expired
  */
 export async function expireSubscription(companyId: string): Promise<Subscription | null> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      await supabase
+        .from('subscriptions')
+        .update({ status: 'suspended' })
+        .eq('company_id', companyId);
+    }
+  }
+
   const store = getStore();
   const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
   if (subIdx === -1) return null;
@@ -291,7 +344,6 @@ export async function expireSubscription(companyId: string): Promise<Subscriptio
 
   const sub = store.subscriptions[subIdx];
 
-  // Dispatch webhook event to all formerly subscribed modules
   for (const modId of sub.includedModuleIds) {
     await dispatchWebhookEvent(
       'subscription.expired',
@@ -308,9 +360,19 @@ export async function expireSubscription(companyId: string): Promise<Subscriptio
 }
 
 /**
- * Cancels a subscription and dispatches the subscription.expired webhook
+ * Cancels a subscription
  */
 export async function cancelSubscription(companyId: string): Promise<Subscription | null> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      await supabase
+        .from('subscriptions')
+        .update({ status: 'cancelled', cancel_at_period_end: true })
+        .eq('company_id', companyId);
+    }
+  }
+
   const store = getStore();
   const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
   if (subIdx === -1) return null;
@@ -335,3 +397,4 @@ export async function cancelSubscription(companyId: string): Promise<Subscriptio
 
   return sub;
 }
+

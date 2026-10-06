@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from './storage';
 import { ModuleManifest, Workspace } from '@kazibox/sdk';
+import { createAdminClient } from './supabase/admin';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 /**
- * Rate Limiter (Token bucket / Sliding window in-memory placeholder)
- * In production, migrate this to Redis (e.g. Upstash Redis / Cloudflare KV)
+ * Rate Limiter
  */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
@@ -44,12 +46,6 @@ export function hashSecret(secret: string): string {
 
 /**
  * Authenticates module API requests against the Module Registry.
- * Enforces:
- * 1. Bearer API key authentication (401)
- * 2. Rate limiting (429)
- * 3. Module registration check (404)
- * 4. Module published status check (403)
- * 5. Scope authorization check (403)
  */
 export async function authenticateModuleApiKey(
   req: NextRequest,
@@ -95,21 +91,39 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 3. Resolve API Key in Registry Storage
+  // 3. Resolve API Key in Supabase or Storage
   const store = getStore();
   const computedHash = hashSecret(apiKey);
+  let targetModuleId: string | undefined;
+  let targetCompanyId: string | undefined;
 
-  // Check matching key record by hash, prefix or demo key
-  const matchingKey = store.apiKeys.find(
-    (k) =>
-      k.hashedSecret === computedHash ||
-      apiKey.startsWith(k.prefix.replace('...', '')) ||
-      (apiKey.includes('demo') && k.moduleId === 'demo')
-  );
+  if (isSupabaseConfigured()) {
+    const supabase: any = createAdminClient() || createServerClient();
+    if (supabase) {
+      const { data: keyData } = await supabase
+        .from('module_api_keys')
+        .select('*')
+        .or(`key_hash.eq.${computedHash},key_prefix.ilike.${apiKey.substring(0, 10)}%`)
+        .maybeSingle();
 
-  let targetModuleId = matchingKey?.moduleId;
+      if (keyData) {
+        targetModuleId = keyData.module_id;
+        targetCompanyId = keyData.company_id;
+      }
+    }
+  }
 
-  // Fallback for direct development testing with mock keys like kz_live_demo... or kz_live_hotel...
+  if (!targetModuleId) {
+    const matchingKey = store.apiKeys.find(
+      (k) =>
+        k.hashedSecret === computedHash ||
+        apiKey.startsWith(k.prefix.replace('...', '')) ||
+        (apiKey.includes('demo') && k.moduleId === 'demo')
+    );
+    targetModuleId = matchingKey?.moduleId;
+  }
+
+  // Fallback for direct development testing with mock keys
   if (!targetModuleId) {
     if (apiKey.includes('demo') || apiKey === 'kz_test_demo_key') {
       targetModuleId = 'demo';
@@ -148,7 +162,7 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 5. Check Module Status (Only 'published' modules can make API calls)
+  // 5. Check Module Status
   if (module.status !== 'published') {
     return {
       errorResponse: NextResponse.json(
@@ -182,10 +196,21 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 7. Resolve Workspace Context (via X-Workspace-Id header, ?workspaceId= query param, or default workspace)
+  // 7. Resolve Workspace Context
   const queryWsId = req.nextUrl?.searchParams?.get('workspaceId');
-  const requestedWsId = req.headers.get('x-workspace-id') || queryWsId || 'ws-palmeraie-01';
-  const workspace = store.workspaces.find((w) => w.id === requestedWsId || w.company_id === requestedWsId) || store.workspaces[0];
+  const requestedWsId = req.headers.get('x-workspace-id') || queryWsId || targetCompanyId || '11111111-1111-4111-8111-111111111111';
+  const workspace = store.workspaces.find((w) => w.id === requestedWsId || w.company_id === requestedWsId) || {
+    id: requestedWsId,
+    company_id: requestedWsId,
+    name: 'Hôtel & Résidence Palmeraie',
+    country: 'Côte d’Ivoire',
+    currency: 'XOF',
+    language: 'fr',
+    logo_url: '',
+    created_at: new Date().toISOString(),
+    plan: 'pro' as const,
+    status: 'active' as const,
+  };
 
   return {
     auth: {
@@ -196,3 +221,4 @@ export async function authenticateModuleApiKey(
     },
   };
 }
+

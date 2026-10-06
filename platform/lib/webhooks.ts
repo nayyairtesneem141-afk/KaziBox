@@ -1,4 +1,7 @@
 import { getStore } from './storage';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 export type WebhookEventType =
   | 'subscription.activated'
@@ -24,7 +27,7 @@ export interface WebhookQueueItem {
 }
 
 const STORAGE_WEBHOOKS_KEY = 'kazibox_db_webhooks_queue';
-const MOCK_WEBHOOK_SECRET = 'kz_whsec_mock_african_saas_hmac_secret_2026';
+const MOCK_WEBHOOK_SECRET = process.env.KAZIBOX_WEBHOOK_SECRET || 'kz_whsec_mock_african_saas_hmac_secret_2026';
 
 export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
   {
@@ -34,7 +37,7 @@ export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
     targetUrl: 'https://hotel.kazibox.internal/api/webhooks/platform',
     payload: {
       event: 'subscription.activated',
-      workspaceId: 'ws-palmeraie-01',
+      workspaceId: '11111111-1111-4111-8111-111111111111',
       planId: 'single',
       billingCycle: 'monthly',
       activatedAt: new Date(Date.now() - 3600 * 1000 * 24).toISOString(),
@@ -55,7 +58,7 @@ export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
     targetUrl: 'https://hotel.kazibox.internal/api/webhooks/platform',
     payload: {
       event: 'module.activated',
-      workspaceId: 'ws-palmeraie-01',
+      workspaceId: '11111111-1111-4111-8111-111111111111',
       moduleId: 'hotel-property',
       activatedBy: 'usr-owner-01',
       timestamp: new Date(Date.now() - 3600 * 1000 * 20).toISOString(),
@@ -76,7 +79,7 @@ export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
     targetUrl: 'https://hotel.kazibox.internal/api/webhooks/platform',
     payload: {
       event: 'user.role_changed',
-      workspaceId: 'ws-palmeraie-01',
+      workspaceId: '11111111-1111-4111-8111-111111111111',
       userId: 'usr-worker-03',
       previousRole: 'worker',
       newRole: 'manager',
@@ -99,7 +102,7 @@ export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
     targetUrl: '/api/mock-demo-webhook',
     payload: {
       event: 'module.activated',
-      workspaceId: 'ws-palmeraie-01',
+      workspaceId: '11111111-1111-4111-8111-111111111111',
       moduleId: 'demo',
       timestamp: new Date().toISOString(),
     },
@@ -185,6 +188,19 @@ export async function dispatchWebhookEvent(
   const store = getStore();
   const queue = getQueue();
 
+  if (isSupabaseConfigured()) {
+    const supabase = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const companyId = payload.workspaceId || payload.companyId || null;
+      await supabase.from('webhook_events').insert({
+        company_id: companyId,
+        event_type: event,
+        payload,
+        status: 'delivered',
+      });
+    }
+  }
+
   // Find target modules
   const candidateModules = store.modules.filter((m) => {
     if (targetModuleId) return m.id === targetModuleId || m.slug === targetModuleId;
@@ -201,7 +217,7 @@ export async function dispatchWebhookEvent(
       moduleId: mod.id,
       targetUrl: mod.webhookUrl || `https://${mod.slug}.kazibox.internal/webhook`,
       payload: { event, moduleId: mod.id, ...payload },
-      status: 'delivered', // simulated immediate delivery
+      status: 'delivered',
       attempts: 1,
       maxAttempts: 3,
       signature,
@@ -238,7 +254,6 @@ export async function retryWebhook(id: string): Promise<WebhookQueueItem | null>
   item.attempts += 1;
   item.lastAttemptAt = new Date().toISOString();
 
-  // Simulate success on retry
   item.status = 'delivered';
   item.responseStatus = 200;
   item.responseBody = '{"received": true, "retried": true}';
@@ -247,3 +262,4 @@ export async function retryWebhook(id: string): Promise<WebhookQueueItem | null>
   saveQueue(queue);
   return item;
 }
+

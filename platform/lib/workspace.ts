@@ -1,21 +1,64 @@
 import { Workspace } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
 import { getSession } from './auth';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 /**
  * Fetch all workspaces for the account or tenant
- * In Supabase: const { data } = await supabase.from('companies').select('*');
  */
 export async function getWorkspaces(): Promise<Workspace[]> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase.from('companies').select('*');
+      if (data && data.length > 0) {
+        return data.map((c: any) => ({
+          id: c.id,
+          company_id: c.id,
+          name: c.name,
+          country: c.country,
+          currency: c.currency,
+          language: c.language,
+          logo_url: c.logo_url || '',
+          created_at: c.created_at,
+          plan: c.plan as Workspace['plan'],
+          status: c.status as Workspace['status'],
+        }));
+      }
+    }
+  }
+
   const store = getStore();
   return store.workspaces;
 }
 
 /**
  * Fetch workspace by company_id
- * In Supabase: const { data } = await supabase.from('companies').select('*').eq('id', companyId).single();
  */
 export async function getWorkspace(companyId: string): Promise<Workspace | null> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase.from('companies').select('*').eq('id', companyId).maybeSingle();
+      if (data) {
+        return {
+          id: data.id,
+          company_id: data.id,
+          name: data.name,
+          country: data.country,
+          currency: data.currency,
+          language: data.language,
+          logo_url: data.logo_url || '',
+          created_at: data.created_at,
+          plan: data.plan as Workspace['plan'],
+          status: data.status as Workspace['status'],
+        };
+      }
+    }
+  }
+
   const store = getStore();
   const ws = store.workspaces.find((w) => w.company_id === companyId || w.id === companyId);
   return ws || null;
@@ -23,7 +66,6 @@ export async function getWorkspace(companyId: string): Promise<Workspace | null>
 
 /**
  * Create new workspace / company
- * In Supabase: const { data } = await supabase.from('companies').insert({...}).select().single();
  */
 export async function createWorkspace(params: {
   name: string;
@@ -32,6 +74,54 @@ export async function createWorkspace(params: {
   language?: string;
   logo_url?: string;
 }): Promise<{ data: Workspace | null; error: Error | null }> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('companies')
+        .insert({
+          name: params.name.trim(),
+          country: params.country,
+          currency: params.currency,
+          language: params.language || 'fr',
+          logo_url: params.logo_url || null,
+          plan: 'starter',
+          status: 'active',
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        return { data: null, error: new Error(error?.message || 'Erreur lors de la création de la société') };
+      }
+
+      const newWorkspace: Workspace = {
+        id: data.id,
+        company_id: data.id,
+        name: data.name,
+        country: data.country,
+        currency: data.currency,
+        language: data.language,
+        logo_url: data.logo_url || '',
+        created_at: data.created_at,
+        plan: data.plan as Workspace['plan'],
+        status: data.status as Workspace['status'],
+      };
+
+      const session = await getSession();
+      if (session && typeof window !== 'undefined') {
+        session.workspace = newWorkspace;
+        session.user.company_id = data.id;
+        localStorage.setItem('kazibox_current_session', JSON.stringify(session));
+        document.cookie = `kazibox_session=${encodeURIComponent(
+          JSON.stringify({ userId: session.user.id, companyId: newWorkspace.company_id })
+        )}; path=/; max-age=604800; SameSite=Lax`;
+      }
+
+      return { data: newWorkspace, error: null };
+    }
+  }
+
   await new Promise((resolve) => setTimeout(resolve, 350));
   const store = getStore();
 
@@ -68,12 +158,56 @@ export async function createWorkspace(params: {
 
 /**
  * Update workspace / company details
- * In Supabase: const { data } = await supabase.from('companies').update(updates).eq('id', companyId).select().single();
  */
 export async function updateWorkspace(
   companyId: string,
   updates: Partial<Workspace>
 ): Promise<{ data: Workspace | null; error: Error | null }> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('companies')
+        .update({
+          name: updates.name,
+          country: updates.country,
+          currency: updates.currency,
+          language: updates.language,
+          logo_url: updates.logo_url,
+          plan: updates.plan,
+          status: updates.status,
+        })
+        .eq('id', companyId)
+        .select()
+        .single();
+
+      if (error || !data) {
+        return { data: null, error: new Error(error?.message || 'Erreur lors de la mise à jour') };
+      }
+
+      const updated: Workspace = {
+        id: data.id,
+        company_id: data.id,
+        name: data.name,
+        country: data.country,
+        currency: data.currency,
+        language: data.language,
+        logo_url: data.logo_url || '',
+        created_at: data.created_at,
+        plan: data.plan as Workspace['plan'],
+        status: data.status as Workspace['status'],
+      };
+
+      const session = await getSession();
+      if (session && session.workspace.company_id === companyId && typeof window !== 'undefined') {
+        session.workspace = updated;
+        localStorage.setItem('kazibox_current_session', JSON.stringify(session));
+      }
+
+      return { data: updated, error: null };
+    }
+  }
+
   await new Promise((resolve) => setTimeout(resolve, 300));
   const store = getStore();
   const idx = store.workspaces.findIndex((w) => w.company_id === companyId || w.id === companyId);
@@ -119,3 +253,4 @@ export async function switchWorkspace(companyId: string): Promise<boolean> {
 
   return true;
 }
+

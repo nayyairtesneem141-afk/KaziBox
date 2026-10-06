@@ -1,4 +1,8 @@
 import { getStore, setStoreItem } from './storage';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { createAdminClient } from './supabase/admin';
+import { isSupabaseConfigured } from './supabase/config';
 
 export interface FinanceRecord {
   id: string;
@@ -32,13 +36,13 @@ export interface ModuleFinanceBreakdown {
 }
 
 // In-memory / storage key for shared finance records
-const STORAGE_FINANCE_KEY = 'kazibox_db_finance_records';
+export const STORAGE_FINANCE_KEY = 'kazibox_db_finance_records';
 
 export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   // Hotel revenue
   {
     id: 'fin-rev-1',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'hotel-property',
     type: 'revenue',
     amount: 145000,
@@ -50,7 +54,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   },
   {
     id: 'fin-rev-2',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'hotel-property',
     type: 'revenue',
     amount: 85000,
@@ -62,7 +66,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   },
   {
     id: 'fin-rev-3',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'hotel-property',
     type: 'revenue',
     amount: 220000,
@@ -75,7 +79,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   // Hotel expenses
   {
     id: 'fin-exp-1',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'hotel-property',
     type: 'expense',
     amount: 35000,
@@ -87,7 +91,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   },
   {
     id: 'fin-exp-2',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'hotel-property',
     type: 'expense',
     amount: 52000,
@@ -100,7 +104,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   // Demo module test records
   {
     id: 'fin-rev-demo-1',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'demo',
     type: 'revenue',
     amount: 25000,
@@ -112,7 +116,7 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   },
   {
     id: 'fin-exp-demo-1',
-    workspaceId: 'ws-palmeraie-01',
+    workspaceId: '11111111-1111-4111-8111-111111111111',
     moduleId: 'demo',
     type: 'expense',
     amount: 7500,
@@ -124,21 +128,32 @@ export const INITIAL_FINANCE_RECORDS: FinanceRecord[] = [
   },
 ];
 
-// Global cache for server-side persistence in Node process
+// Global in-memory cache for server-side (API routes)
 const globalForFinance = globalThis as unknown as {
   financeRecords: FinanceRecord[] | undefined;
 };
 
-// Helper to get records from storage
 function getFinanceRecordsStore(): FinanceRecord[] {
   if (typeof window !== 'undefined') {
-    const raw = localStorage.getItem(STORAGE_FINANCE_KEY);
-    if (raw) {
-      try {
-        return JSON.parse(raw);
-      } catch {
-        // fallback
+    try {
+      const raw = localStorage.getItem(STORAGE_FINANCE_KEY);
+      if (raw) {
+        const parsed: FinanceRecord[] = JSON.parse(raw);
+        const existingIds = new Set(parsed.map((r) => r.id));
+        let changed = false;
+        for (const r of INITIAL_FINANCE_RECORDS) {
+          if (!existingIds.has(r.id)) {
+            parsed.push(r);
+            changed = true;
+          }
+        }
+        if (changed) localStorage.setItem(STORAGE_FINANCE_KEY, JSON.stringify(parsed));
+        return parsed;
       }
+      localStorage.setItem(STORAGE_FINANCE_KEY, JSON.stringify(INITIAL_FINANCE_RECORDS));
+      return [...INITIAL_FINANCE_RECORDS];
+    } catch {
+      return [...INITIAL_FINANCE_RECORDS];
     }
   }
   if (!globalForFinance.financeRecords) {
@@ -152,6 +167,7 @@ function saveFinanceRecordsStore(records: FinanceRecord[]) {
     try {
       localStorage.setItem(STORAGE_FINANCE_KEY, JSON.stringify(records));
     } catch {}
+    return;
   }
   globalForFinance.financeRecords = records;
 }
@@ -170,9 +186,75 @@ export interface RecordRevenueInput {
  * Records a revenue item with idempotency enforcement.
  */
 export async function recordRevenue(input: RecordRevenueInput): Promise<{ record: FinanceRecord; isDuplicate: boolean }> {
-  const records = getFinanceRecordsStore();
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined'
+      ? createBrowserClient()
+      : (createAdminClient() || createServerClient());
 
-  // Check idempotency by reference and workspace
+    if (supabase) {
+      // 1. Idempotency check in Supabase by (company_id, reference, type)
+      const { data: existing } = await supabase
+        .from('finance_records')
+        .select('*')
+        .eq('company_id', input.workspaceId)
+        .eq('reference', input.reference)
+        .eq('type', 'revenue')
+        .maybeSingle();
+
+      if (existing) {
+        return {
+          record: {
+            id: existing.id,
+            workspaceId: existing.company_id,
+            moduleId: existing.module_id,
+            type: existing.type as 'revenue' | 'expense',
+            amount: Number(existing.amount),
+            currency: existing.currency,
+            categoryOrSource: existing.category_or_source,
+            occurredAt: existing.occurred_at,
+            reference: existing.reference,
+            createdAt: existing.created_at,
+          },
+          isDuplicate: true,
+        };
+      }
+
+      // 2. Insert into Supabase
+      const { data: inserted, error } = await supabase
+        .from('finance_records')
+        .insert({
+          company_id: input.workspaceId,
+          module_id: input.moduleId,
+          type: 'revenue',
+          amount: input.amount,
+          currency: input.currency || 'XOF',
+          category_or_source: input.source,
+          reference: input.reference,
+          occurred_at: input.occurredAt || new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (inserted && !error) {
+        const record: FinanceRecord = {
+          id: inserted.id,
+          workspaceId: inserted.company_id,
+          moduleId: inserted.module_id,
+          type: 'revenue',
+          amount: Number(inserted.amount),
+          currency: inserted.currency,
+          categoryOrSource: inserted.category_or_source,
+          occurredAt: inserted.occurred_at,
+          reference: inserted.reference,
+          createdAt: inserted.created_at,
+        };
+        return { record, isDuplicate: false };
+      }
+    }
+  }
+
+  // Fallback in-memory / local storage logic
+  const records = getFinanceRecordsStore();
   const existing = records.find(
     (r) => r.reference === input.reference && r.workspaceId === input.workspaceId && r.type === 'revenue'
   );
@@ -213,9 +295,75 @@ export interface RecordExpenseInput {
  * Records an expense item with idempotency enforcement.
  */
 export async function recordExpense(input: RecordExpenseInput): Promise<{ record: FinanceRecord; isDuplicate: boolean }> {
-  const records = getFinanceRecordsStore();
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined'
+      ? createBrowserClient()
+      : (createAdminClient() || createServerClient());
 
-  // Check idempotency by reference and workspace
+    if (supabase) {
+      // 1. Idempotency check in Supabase by (company_id, reference, type)
+      const { data: existing } = await supabase
+        .from('finance_records')
+        .select('*')
+        .eq('company_id', input.workspaceId)
+        .eq('reference', input.reference)
+        .eq('type', 'expense')
+        .maybeSingle();
+
+      if (existing) {
+        return {
+          record: {
+            id: existing.id,
+            workspaceId: existing.company_id,
+            moduleId: existing.module_id,
+            type: existing.type as 'revenue' | 'expense',
+            amount: Number(existing.amount),
+            currency: existing.currency,
+            categoryOrSource: existing.category_or_source,
+            occurredAt: existing.occurred_at,
+            reference: existing.reference,
+            createdAt: existing.created_at,
+          },
+          isDuplicate: true,
+        };
+      }
+
+      // 2. Insert into Supabase
+      const { data: inserted, error } = await supabase
+        .from('finance_records')
+        .insert({
+          company_id: input.workspaceId,
+          module_id: input.moduleId,
+          type: 'expense',
+          amount: input.amount,
+          currency: input.currency || 'XOF',
+          category_or_source: input.category,
+          reference: input.reference,
+          occurred_at: input.occurredAt || new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (inserted && !error) {
+        const record: FinanceRecord = {
+          id: inserted.id,
+          workspaceId: inserted.company_id,
+          moduleId: inserted.module_id,
+          type: 'expense',
+          amount: Number(inserted.amount),
+          currency: inserted.currency,
+          categoryOrSource: inserted.category_or_source,
+          occurredAt: inserted.occurred_at,
+          reference: inserted.reference,
+          createdAt: inserted.created_at,
+        };
+        return { record, isDuplicate: false };
+      }
+    }
+  }
+
+  // Fallback in-memory logic
+  const records = getFinanceRecordsStore();
   const existing = records.find(
     (r) => r.reference === input.reference && r.workspaceId === input.workspaceId && r.type === 'expense'
   );
@@ -300,7 +448,7 @@ export async function getFinanceSummary(
   range: FinanceDateRange = '30d',
   customDates?: CustomDateRangeOptions
 ): Promise<FinanceSummary> {
-  const allRecords = getFinanceRecordsStore().filter((r) => r.workspaceId === workspaceId);
+  const allRecords = await getFinanceTimeline(workspaceId, 'all');
   const filtered = filterByRange(allRecords, range, customDates);
 
   let totalRevenue = 0;
@@ -332,7 +480,7 @@ export async function getFinanceByModule(
   range: FinanceDateRange = '30d',
   customDates?: CustomDateRangeOptions
 ): Promise<ModuleFinanceBreakdown[]> {
-  const allRecords = getFinanceRecordsStore().filter((r) => r.workspaceId === workspaceId);
+  const allRecords = await getFinanceTimeline(workspaceId, 'all');
   const filtered = filterByRange(allRecords, range, customDates);
 
   const breakdownMap: Record<string, { revenue: number; expenses: number }> = {};
@@ -367,6 +515,37 @@ export async function getFinanceTimeline(
   range: FinanceDateRange = '7d',
   customDates?: CustomDateRangeOptions
 ): Promise<FinanceRecord[]> {
-  const allRecords = getFinanceRecordsStore().filter((r) => r.workspaceId === workspaceId);
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined'
+      ? createBrowserClient()
+      : (createAdminClient() || createServerClient());
+
+    if (supabase) {
+      const { data } = await supabase
+        .from('finance_records')
+        .select('*')
+        .eq('company_id', workspaceId)
+        .order('occurred_at', { ascending: false });
+
+      if (data && data.length > 0) {
+        const records: FinanceRecord[] = data.map((item: any) => ({
+          id: item.id,
+          workspaceId: item.company_id,
+          moduleId: item.module_id,
+          type: item.type as 'revenue' | 'expense',
+          amount: Number(item.amount),
+          currency: item.currency,
+          categoryOrSource: item.category_or_source,
+          occurredAt: item.occurred_at,
+          reference: item.reference,
+          createdAt: item.created_at,
+        }));
+        return filterByRange(records, range, customDates);
+      }
+    }
+  }
+
+  const allRecords = getFinanceRecordsStore().filter((r) => r.workspaceId === workspaceId || r.workspaceId === 'ws-palmeraie-01');
   return filterByRange(allRecords, range, customDates);
 }
+

@@ -8,6 +8,7 @@ import { useSession } from '@/lib/useSession';
 import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
 import { issueModuleToken, verifyModuleToken, ModuleTokenPayload } from '@/lib/sso';
+import { STORAGE_FINANCE_KEY, INITIAL_FINANCE_RECORDS } from '@/lib/finance';
 
 function DemoModuleContent() {
   const searchParams = useSearchParams();
@@ -116,6 +117,17 @@ function DemoModuleContent() {
         }),
       });
       const data = await res.json();
+      // Sync new record to localStorage so Dashboard reads it immediately
+      if (res.ok && data.record) {
+        try {
+          const raw = localStorage.getItem(STORAGE_FINANCE_KEY);
+          const existing = raw ? JSON.parse(raw) : [...INITIAL_FINANCE_RECORDS];
+          if (!existing.find((r: any) => r.id === data.record.id)) {
+            existing.unshift(data.record);
+            localStorage.setItem(STORAGE_FINANCE_KEY, JSON.stringify(existing));
+          }
+        } catch {}
+      }
       setApiLogs((prev) => [
         { time: new Date().toLocaleTimeString(), endpoint: 'POST /api/v1/finance/revenue', status: res.status, data },
         ...prev,
@@ -149,6 +161,17 @@ function DemoModuleContent() {
         }),
       });
       const data = await res.json();
+      // Sync new record to localStorage so Dashboard reads it immediately
+      if (res.ok && data.record) {
+        try {
+          const raw = localStorage.getItem(STORAGE_FINANCE_KEY);
+          const existing = raw ? JSON.parse(raw) : [...INITIAL_FINANCE_RECORDS];
+          if (!existing.find((r: any) => r.id === data.record.id)) {
+            existing.unshift(data.record);
+            localStorage.setItem(STORAGE_FINANCE_KEY, JSON.stringify(existing));
+          }
+        } catch {}
+      }
       setApiLogs((prev) => [
         { time: new Date().toLocaleTimeString(), endpoint: 'POST /api/v1/finance/expenses', status: res.status, data },
         ...prev,

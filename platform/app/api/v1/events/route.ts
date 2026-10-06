@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateModuleApiKey } from '@/lib/api-auth';
 import { z } from '@/lib/validation';
 import { getStore } from '@/lib/storage';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { createServerClient } from '@/lib/supabase/server';
+import { isSupabaseConfigured } from '@/lib/supabase/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,6 +97,17 @@ export async function POST(req: NextRequest) {
 
   telemetryEvents.unshift(newEvent);
 
+  if (isSupabaseConfigured()) {
+    const supabase: any = createAdminClient() || createServerClient();
+    if (supabase) {
+      await supabase.from('activity_logs').insert({
+        company_id: auth!.workspaceId,
+        action: `${data.moduleId}.${data.action}`,
+        details: { entity: data.entity, entityId: data.entityId, ...data.details },
+      });
+    }
+  }
+
   // Optional: create in-app notification if event is notable
   const store = getStore();
   const modDisplayName = typeof auth!.module.name === 'string' ? auth!.module.name : (auth!.module.name?.fr || auth!.module.name?.en || auth!.module.id);
@@ -118,3 +132,4 @@ export async function POST(req: NextRequest) {
     { status: 201 }
   );
 }
+

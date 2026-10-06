@@ -823,6 +823,7 @@ const STORAGE_KEYS = {
   SUBSCRIPTIONS: 'kazibox_db_subscriptions',
   PAYMENTS: 'kazibox_db_payments',
   API_KEYS: 'kazibox_db_api_keys',
+  FINANCE: 'kazibox_db_finance_records',
   CURRENT_SESSION: 'kazibox_current_session',
 };
 

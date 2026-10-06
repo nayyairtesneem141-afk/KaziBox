@@ -1,11 +1,37 @@
 import { NotificationItem, NotificationType } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 /**
  * Fetch notifications for current workspace
- * In Supabase: const { data } = await supabase.from('notifications').select('*').eq('company_id', companyId).order('created_at', { ascending: false });
  */
 export async function getNotifications(companyId: string): Promise<NotificationItem[]> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (data && data.length > 0) {
+        return data.map((n: any) => ({
+          id: n.id,
+          company_id: n.company_id,
+          title: n.title,
+          message: n.message,
+          type: n.type as NotificationType,
+          read: n.read,
+          created_at: n.created_at,
+          link: n.link || undefined,
+        }));
+      }
+    }
+  }
+
   const store = getStore();
   return store.notifications
     .filter((n) => n.company_id === companyId)
@@ -14,9 +40,19 @@ export async function getNotifications(companyId: string): Promise<NotificationI
 
 /**
  * Mark single notification as read
- * In Supabase: await supabase.from('notifications').update({ read: true }).eq('id', notificationId);
  */
 export async function markNotificationAsRead(notificationId: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', notificationId);
+      if (!error) return true;
+    }
+  }
+
   const store = getStore();
   const idx = store.notifications.findIndex((n) => n.id === notificationId);
   if (idx !== -1) {
@@ -29,9 +65,19 @@ export async function markNotificationAsRead(notificationId: string): Promise<bo
 
 /**
  * Mark all notifications as read for current workspace
- * In Supabase: await supabase.from('notifications').update({ read: true }).eq('company_id', companyId);
  */
 export async function markAllNotificationsAsRead(companyId: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('company_id', companyId);
+      if (!error) return true;
+    }
+  }
+
   const store = getStore();
   store.notifications = store.notifications.map((n) =>
     n.company_id === companyId ? { ...n, read: true } : n
@@ -50,6 +96,37 @@ export async function createNotification(params: {
   type: NotificationType;
   link?: string;
 }): Promise<NotificationItem> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('notifications')
+        .insert({
+          company_id: params.companyId,
+          title: params.title,
+          message: params.message,
+          type: params.type,
+          read: false,
+          link: params.link || null,
+        })
+        .select()
+        .single();
+
+      if (data && !error) {
+        return {
+          id: data.id,
+          company_id: data.company_id,
+          title: data.title,
+          message: data.message,
+          type: data.type as NotificationType,
+          read: data.read,
+          created_at: data.created_at,
+          link: data.link || undefined,
+        };
+      }
+    }
+  }
+
   const store = getStore();
   const newNotif: NotificationItem = {
     id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -132,3 +209,4 @@ export async function notifyPaymentFailed(companyId: string, amount = '15 000 XO
     link: '/billing',
   });
 }
+

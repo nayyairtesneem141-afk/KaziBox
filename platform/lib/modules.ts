@@ -3,21 +3,83 @@ import { getStore, setStoreItem } from './storage';
 import { getSubscription } from './billing';
 import { notifyModuleActivated, notifyModuleDeactivated } from './notifications';
 import { dispatchWebhookEvent } from './webhooks';
+import { createBrowserClient } from './supabase/client';
+import { createServerClient } from './supabase/server';
+import { isSupabaseConfigured } from './supabase/config';
 
 /**
  * Fetch all registered modules
- * In Supabase: const { data } = await supabase.from('modules').select('*').order('name');
  */
 export async function getModules(): Promise<ModuleManifest[]> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase.from('modules').select('*');
+      if (data && data.length > 0) {
+        return data.map((m: any) => {
+          const rawManifest = (typeof m.manifest === 'object' && m.manifest !== null) ? m.manifest : {};
+          return {
+            id: m.id,
+            slug: m.slug,
+            name: m.name as any,
+            description: m.description as any,
+            tagline: m.tagline as any,
+            category: m.category,
+            icon: m.icon,
+            kind: m.kind as any,
+            status: m.status === 'active' ? 'published' : (m.status as any),
+            developer: m.developer,
+            version: m.version,
+            minPlatformVersion: m.min_platform_version,
+            features: m.features as any,
+            pricing: m.pricing as any,
+            ...rawManifest,
+          } as ModuleManifest;
+        });
+      }
+    }
+  }
+
   const store = getStore();
   return store.modules;
 }
 
 /**
  * Fetch single module by slug or id
- * In Supabase: const { data } = await supabase.from('modules').select('*').or(`id.eq.${slugOrId},slug.eq.${slugOrId}`).single();
  */
 export async function getModule(slugOrId: string): Promise<ModuleManifest | null> {
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    if (supabase) {
+      const { data } = await supabase
+        .from('modules')
+        .select('*')
+        .or(`id.eq.${slugOrId},slug.eq.${slugOrId}`)
+        .maybeSingle();
+
+      if (data) {
+        const rawManifest = (typeof data.manifest === 'object' && data.manifest !== null) ? data.manifest : {};
+        return {
+          id: data.id,
+          slug: data.slug,
+          name: data.name as any,
+          description: data.description as any,
+          tagline: data.tagline as any,
+          category: data.category,
+          icon: data.icon,
+          kind: data.kind as any,
+          status: data.status === 'active' ? 'published' : (data.status as any),
+          developer: data.developer,
+          version: data.version,
+          minPlatformVersion: data.min_platform_version,
+          features: data.features as any,
+          pricing: data.pricing as any,
+          ...rawManifest,
+        } as ModuleManifest;
+      }
+    }
+  }
+
   const store = getStore();
   const found = store.modules.find((m) => m.id === slugOrId || m.slug === slugOrId);
   return found || null;
@@ -25,7 +87,6 @@ export async function getModule(slugOrId: string): Promise<ModuleManifest | null
 
 /**
  * Check if the workspace has active subscription access to a given module
- * In Supabase: RPC check or subscription joined query
  */
 export async function hasModuleAccess(companyId: string, moduleId: string): Promise<boolean> {
   const sub = await getSubscription(companyId);
@@ -40,12 +101,53 @@ export async function hasModuleAccess(companyId: string, moduleId: string): Prom
 
 /**
  * Activate a module for the given workspace
- * In Supabase: update subscription or module_activations junction table
  */
 export async function activateModule(
   companyId: string,
   moduleId: string
 ): Promise<{ success: boolean; message?: string }> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      // Upsert into company_modules
+      await supabase.from('company_modules').upsert({
+        company_id: companyId,
+        module_id: moduleId,
+        plan_id: 'starter',
+        status: 'active',
+      }, { onConflict: 'company_id,module_id' });
+
+      // Update subscription includedModuleIds
+      const { data: subData } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('company_id', companyId)
+        .maybeSingle();
+
+      if (subData) {
+        const currentList = Array.isArray(subData.included_module_ids) ? (subData.included_module_ids as string[]) : [];
+        if (!currentList.includes(moduleId)) {
+          currentList.push(moduleId);
+          await supabase.from('subscriptions').update({
+            included_module_ids: currentList,
+          }).eq('id', subData.id);
+        }
+      }
+
+      const mod = await getModule(moduleId);
+      const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
+      await notifyModuleActivated(companyId, modName);
+
+      await dispatchWebhookEvent('module.activated', {
+        workspaceId: companyId,
+        moduleId,
+        activatedAt: new Date().toISOString(),
+      }, moduleId);
+
+      return { success: true };
+    }
+  }
+
   await new Promise((r) => setTimeout(r, 300));
   const store = getStore();
   const subIdx = store.subscriptions.findIndex(
@@ -88,6 +190,47 @@ export async function deactivateModule(
   companyId: string,
   moduleId: string
 ): Promise<{ success: boolean; message?: string }> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      await supabase
+        .from('company_modules')
+        .update({ status: 'cancelled' })
+        .eq('company_id', companyId)
+        .eq('module_id', moduleId);
+
+      const { data: subData } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('company_id', companyId)
+        .maybeSingle();
+
+      if (subData) {
+        const currentList = Array.isArray(subData.included_module_ids) ? (subData.included_module_ids as string[]) : [];
+        const updatedList = currentList.filter((id) => id !== moduleId);
+        await supabase.from('subscriptions').update({
+          included_module_ids: updatedList,
+        }).eq('id', subData.id);
+      }
+
+      const mod = await getModule(moduleId);
+      const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
+      await notifyModuleDeactivated(companyId, modName);
+
+      await dispatchWebhookEvent('module.deactivated', {
+        workspaceId: companyId,
+        moduleId,
+        deactivatedAt: new Date().toISOString(),
+        dataRetentionDays: 30,
+      }, moduleId);
+
+      return {
+        success: true,
+        message: 'Vos données sont conservées pendant 30 jours.',
+      };
+    }
+  }
+
   await new Promise((r) => setTimeout(r, 300));
   const store = getStore();
   const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
@@ -133,7 +276,7 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
   }
 
   const activeModIds = sub.planId === 'all_access'
-    ? allMods.filter((m) => m.status === 'published').map((m) => m.id)
+    ? allMods.filter((m) => m.status === 'published' || (m.status as string) === 'active').map((m) => m.id)
     : sub.includedModuleIds;
 
   const summaries: any[] = [];
@@ -148,13 +291,24 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
     let metrics: any[] = [];
 
     if (modId === 'hotel-property') {
-      rev = 450000;
-      exp = 87000;
-      activity = 14;
-      metrics = [
-        { id: 'm1', moduleId: modId, label: { fr: 'Chambres occupées', en: 'Occupied Rooms' }, value: '8 / 12 (67%)' },
-        { id: 'm2', moduleId: modId, label: { fr: 'Arrivées prévues', en: 'Expected Check-ins' }, value: 4 },
-      ];
+      try {
+        const { getHotelDashboardMetrics } = require('./hotel');
+        const htl = await getHotelDashboardMetrics(companyId);
+        rev = htl.totalRevenue;
+        activity = htl.occupiedRooms + htl.todayCheckIns;
+        metrics = [
+          { id: 'm1', moduleId: modId, label: { fr: 'Chambres occupées', en: 'Occupied Rooms' }, value: `${htl.occupiedRooms} / ${htl.totalRooms} (${htl.occupancyRate}%)` },
+          { id: 'm2', moduleId: modId, label: { fr: 'Arrivées prévues', en: 'Expected Check-ins' }, value: htl.todayCheckIns },
+        ];
+      } catch {
+        rev = 450000;
+        exp = 87000;
+        activity = 14;
+        metrics = [
+          { id: 'm1', moduleId: modId, label: { fr: 'Chambres occupées', en: 'Occupied Rooms' }, value: '8 / 12 (67%)' },
+          { id: 'm2', moduleId: modId, label: { fr: 'Arrivées prévues', en: 'Expected Check-ins' }, value: 4 },
+        ];
+      }
     } else if (modId === 'garage') {
       rev = 280000;
       exp = 65000;
@@ -186,4 +340,5 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
 
   return summaries;
 }
+
 
