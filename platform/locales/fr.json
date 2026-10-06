@@ -130,7 +130,25 @@
     "no_data": "Aucune donnée enregistrée",
     "waiting_module": "En attente d'un module actif",
     "recent_activity": "Activité récente",
-    "no_activity": "Aucune activité récente pour le moment."
+    "no_activity": "Aucune activité récente pour le moment.",
+    "title": "Tableau de Bord Consolidé",
+    "consolidated_subtitle": "Vue globale consolidée de toutes vos activités",
+    "worker_portal_title": "Portail Opérationnel Agent",
+    "worker_portal_desc": "En tant qu'agent d'exploitation, votre accès est concentré sur votre module métier de terrain.",
+    "range_today": "Aujourd'hui",
+    "range_7d": "7 jours",
+    "range_30d": "30 jours",
+    "range_custom": "Personnalisé",
+    "range_all": "Tout",
+    "start_date": "Date de début",
+    "end_date": "Date de fin",
+    "apply_filter": "Appliquer",
+    "net_profit": "Marge Nette",
+    "active_modules_card": "Modules Connectés",
+    "chart_title": "Évolution Consolidée : Recettes vs Dépenses",
+    "chart_subtitle": "Courbes d'exploitation générées d'après les flux du Grand Livre partagé",
+    "per_module_title": "Ventilation Métier par Module",
+    "per_module_desc": "Données remontées exclusivement via le contrat public ModuleSummary et l'API Partagée"
   },
   "profile": {
     "user_title": "Mon Profil Personnel",
@@ -321,6 +339,28 @@
   },
   "sidebar": {
     "active_modules_section": "Modules Actifs",
+    "my_assigned_module": "Mon Module Métier",
     "admin_section": "Administration"
+  },
+  "webhooks": {
+    "admin_nav": "Webhooks",
+    "admin_title": "File des Webhooks & Événements",
+    "admin_subtitle": "Surveillance des événements de cycle de vie distribués aux modules",
+    "total_events": "événements",
+    "hmac_security_title": "Signature cryptographique HMAC-SHA256",
+    "hmac_security_desc": "Chaque requête webhook envoyée aux modules inclut l'en-tête x-kazibox-signature pour garantir l'intégrité et l'authenticité.",
+    "status_all": "Tous",
+    "status_delivered": "Livrés",
+    "status_failed": "Échecs",
+    "status_pending": "En attente",
+    "no_events_match": "Aucun événement ne correspond à ce filtre.",
+    "col_event": "Événement",
+    "col_module": "Module",
+    "col_target": "URL Cible",
+    "col_status": "Statut",
+    "col_attempts": "Tentatives",
+    "col_date": "Envoyé le",
+    "view_payload": "Voir Payload",
+    "retry_btn": "Relancer"
   }
 }

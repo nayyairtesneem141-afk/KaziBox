@@ -4,7 +4,10 @@ const config: Config = {
   content: [
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './lib/**/*.{js,ts,jsx,tsx,mdx}',
+    './platform/app/**/*.{js,ts,jsx,tsx,mdx}',
+    './platform/lib/**/*.{js,ts,jsx,tsx,mdx}',
     '../packages/ui/src/**/*.{js,ts,jsx,tsx}',
+    './packages/ui/src/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {

@@ -2,6 +2,10 @@
   "name": "@kazibox/module-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "Empty placeholder demo module for KaziBox ecosystem",
-  "main": "index.js"
+  "description": "Reference demo module for KaziBox ecosystem adhering to SDK & PWA contracts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@kazibox/sdk": "*"
+  }
 }

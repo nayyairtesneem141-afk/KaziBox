@@ -1,6 +1,7 @@
 import { Plan, Subscription, PaymentHistoryItem } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
 import { notifySubscriptionActivated, notifyPaymentFailed } from './notifications';
+import { dispatchWebhookEvent } from './webhooks';
 
 export const PLANS: Plan[] = [
   {
@@ -245,6 +246,20 @@ export async function startCheckout(params: CheckoutParams): Promise<{
   // Trigger in-app notification
   await notifySubscriptionActivated(params.companyId, planTitle);
 
+  // Dispatch webhook event to all subscribed modules
+  for (const modId of params.moduleIds) {
+    await dispatchWebhookEvent(
+      'subscription.activated',
+      {
+        workspaceId: params.companyId,
+        planId: params.planId,
+        billingCycle: params.billingCycle,
+        renewAt: nextPeriod.toISOString(),
+      },
+      modId
+    );
+  }
+
   return {
     success: true,
     subscription: updatedSubscription,
@@ -261,4 +276,62 @@ export async function getPaymentHistory(companyId: string): Promise<PaymentHisto
   return store.payments
     .filter((p) => p.companyId === companyId || !p.companyId || companyId === 'ws-palmeraie-01')
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+}
+
+/**
+ * Marks a subscription as expired and dispatches the subscription.expired webhook
+ */
+export async function expireSubscription(companyId: string): Promise<Subscription | null> {
+  const store = getStore();
+  const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
+  if (subIdx === -1) return null;
+
+  store.subscriptions[subIdx].status = 'expired';
+  setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+
+  const sub = store.subscriptions[subIdx];
+
+  // Dispatch webhook event to all formerly subscribed modules
+  for (const modId of sub.includedModuleIds) {
+    await dispatchWebhookEvent(
+      'subscription.expired',
+      {
+        workspaceId: companyId,
+        planId: sub.planId,
+        expiredAt: new Date().toISOString(),
+      },
+      modId
+    );
+  }
+
+  return sub;
+}
+
+/**
+ * Cancels a subscription and dispatches the subscription.expired webhook
+ */
+export async function cancelSubscription(companyId: string): Promise<Subscription | null> {
+  const store = getStore();
+  const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
+  if (subIdx === -1) return null;
+
+  store.subscriptions[subIdx].status = 'canceled';
+  store.subscriptions[subIdx].autoRenew = false;
+  setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+
+  const sub = store.subscriptions[subIdx];
+
+  for (const modId of sub.includedModuleIds) {
+    await dispatchWebhookEvent(
+      'subscription.expired',
+      {
+        workspaceId: companyId,
+        planId: sub.planId,
+        canceledAt: new Date().toISOString(),
+      },
+      modId
+    );
+  }
+
+  return sub;
 }

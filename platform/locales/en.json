@@ -130,7 +130,25 @@
     "no_data": "No recorded data",
     "waiting_module": "Waiting for active module",
     "recent_activity": "Recent Activity",
-    "no_activity": "No recent activity recorded yet."
+    "no_activity": "No recent activity recorded yet.",
+    "title": "Consolidated Dashboard",
+    "consolidated_subtitle": "Consolidated global overview of all your businesses",
+    "worker_portal_title": "Frontline Worker Portal",
+    "worker_portal_desc": "As a frontline worker, your access is focused on your assigned operational module.",
+    "range_today": "Today",
+    "range_7d": "7 days",
+    "range_30d": "30 days",
+    "range_custom": "Custom",
+    "range_all": "All",
+    "start_date": "Start date",
+    "end_date": "End date",
+    "apply_filter": "Apply",
+    "net_profit": "Net Margin",
+    "active_modules_card": "Connected Modules",
+    "chart_title": "Consolidated Trend: Revenue vs Expenses",
+    "chart_subtitle": "Operational curves generated from the shared ledger stream",
+    "per_module_title": "Per-Module Business Breakdown",
+    "per_module_desc": "Data reported exclusively via the public ModuleSummary contract and Shared API"
   },
   "profile": {
     "user_title": "Personal Profile",
@@ -321,6 +339,28 @@
   },
   "sidebar": {
     "active_modules_section": "Active Modules",
+    "my_assigned_module": "My Assigned Module",
     "admin_section": "Administration"
+  },
+  "webhooks": {
+    "admin_nav": "Webhooks",
+    "admin_title": "Webhook Queue & Events",
+    "admin_subtitle": "Monitoring of lifecycle events dispatched to registered modules",
+    "total_events": "events",
+    "hmac_security_title": "HMAC-SHA256 Cryptographic Signature",
+    "hmac_security_desc": "Every webhook dispatched includes the x-kazibox-signature header for payload integrity and authenticity.",
+    "status_all": "All",
+    "status_delivered": "Delivered",
+    "status_failed": "Failed",
+    "status_pending": "Pending",
+    "no_events_match": "No events match this filter.",
+    "col_event": "Event",
+    "col_module": "Module",
+    "col_target": "Target URL",
+    "col_status": "Status",
+    "col_attempts": "Attempts",
+    "col_date": "Dispatched",
+    "view_payload": "View Payload",
+    "retry_btn": "Retry"
   }
 }

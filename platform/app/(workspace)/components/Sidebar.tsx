@@ -9,6 +9,7 @@ import { platformConfig } from '@/config';
 import { getModules } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
 import { ModuleManifest } from '@kazibox/sdk';
+import { issueModuleToken } from '@/lib/sso';
 
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
@@ -50,6 +51,8 @@ export const Sidebar: React.FC = () => {
     };
   }, [workspace, pathname]);
 
+  const isWorker = role === 'worker';
+
   // Primary navigation items with role permissions
   const navItems = [
     {
@@ -60,7 +63,7 @@ export const Sidebar: React.FC = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
         </svg>
       ),
-      visible: true,
+      visible: !isWorker,
     },
     {
       label: t('nav.my_modules'),
@@ -70,7 +73,7 @@ export const Sidebar: React.FC = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
         </svg>
       ),
-      visible: true,
+      visible: !isWorker,
     },
     {
       label: t('nav.module_catalogue'),
@@ -80,7 +83,7 @@ export const Sidebar: React.FC = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
         </svg>
       ),
-      visible: true,
+      visible: !isWorker,
     },
     {
       // Billing: strictly hidden for workers and managers
@@ -122,7 +125,7 @@ export const Sidebar: React.FC = () => {
     <aside className="w-64 bg-white border-r border-[#E5E7EB] flex-col shrink-0 hidden md:flex min-h-screen">
       {/* Brand Logo Header */}
       <div className="h-20 px-6 border-b border-[#E5E7EB] flex items-center justify-between">
-        <Link href="/dashboard" className="flex items-center gap-2">
+        <Link href={isWorker ? '#' : '/dashboard'} className="flex items-center gap-2">
           <img
             src={platformConfig.logo}
             alt={platformConfig.platformName}
@@ -171,7 +174,7 @@ export const Sidebar: React.FC = () => {
           <div className="pt-2 border-t border-[#E5E7EB]">
             <div className="px-4 py-2 flex items-center justify-between">
               <span className="text-[11px] font-black text-[#9CA3AF] uppercase tracking-wider">
-                {t('sidebar.active_modules_section')}
+                {isWorker ? t('sidebar.my_assigned_module') || 'Mon Module' : t('sidebar.active_modules_section')}
               </span>
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
                 {activeModules.length}
@@ -185,8 +188,12 @@ export const Sidebar: React.FC = () => {
                     ? mod.name
                     : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr || mod.id;
 
-                const modHref = `/modules/${mod.slug}`;
-                const isActive = pathname.startsWith(modHref);
+                const ssoToken = user && workspace ? issueModuleToken(user, workspace, mod.id, language) : '';
+                const baseHref = mod.entryUrl || `/modules/${mod.slug}`;
+                const modHref = ssoToken
+                  ? `${baseHref}${baseHref.includes('?') ? '&' : '?'}token=${encodeURIComponent(ssoToken)}`
+                  : baseHref;
+                const isActive = pathname.startsWith(`/modules/${mod.slug}`) || pathname.startsWith(mod.entryUrl);
 
                 return (
                   <Link
@@ -235,6 +242,20 @@ export const Sidebar: React.FC = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
                 <span>{t('admin.registry_nav')}</span>
+              </Link>
+
+              <Link
+                href="/admin/webhooks"
+                className={`flex items-center gap-3.5 px-4 py-3 rounded-xl font-bold text-sm min-h-[46px] transition-all ${
+                  pathname.startsWith('/admin/webhooks')
+                    ? 'bg-purple-100 text-purple-900 shadow-sm'
+                    : 'text-[#4B5563] hover:text-[#1F2937] hover:bg-[#F9FAFB]'
+                }`}
+              >
+                <svg className="w-5 h-5 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>{t('webhooks.admin_nav') || 'Webhooks'}</span>
               </Link>
             </div>
           </div>

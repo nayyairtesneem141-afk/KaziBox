@@ -148,3 +148,53 @@ Billing is fully centralized at the workspace level:
 - Managed via `/platform/locales/fr.json` and `/platform/locales/en.json`.
 - Dynamic translation helper `t(key)` supports nested keys with automatic fallback.
 - No hardcoded UI strings in components.
+
+---
+
+## 8. Integration API & SSO Login Handoff (Phase 3)
+1. **Public Integration API Handlers (`/api/v1/*`)**:
+   - `GET /api/v1/context`: Tenant metadata, authenticated user, assigned role, language, and activated modules.
+   - `POST /api/v1/finance/revenue`: Ingestion of merchant operational revenue with mandatory idempotency reference.
+   - `POST /api/v1/finance/expenses`: Ingestion of operational expenses with idempotency reference.
+   - `POST /api/v1/events`: Ingestion of domain activity events for audit and cross-module telemetry.
+   - `GET /api/v1/subscription`: Real-time subscription validity check for the calling module.
+2. **SSO Handoff Mechanism (`issueModuleToken` & `verifyModuleToken`)**:
+   - Short-lived signed tokens (5 minutes TTL).
+   - Encodes `userId`, `workspaceId`, `role`, `language`, `currency`, `moduleId`, `iat`, `exp`.
+   - Verified via HMAC-SHA256 signature (migrating to asymmetric RS256 / JWKS in production Supabase).
+   - Real signing keys reside strictly in server environment variables, never in browser bundles.
+
+---
+
+## 9. Shared Finance Ledger & Consolidated Dashboard
+1. **Shared Finance Model (`/platform/lib/finance.ts`)**:
+   - Records are strictly consolidated at the platform level (`workspaceId`, `moduleId`, `type`, `amount`, `currency`, `reference`, `occurredAt`).
+   - Modules never write directly into each other's database tables.
+   - Idempotency guarantees that re-transmitting the same reference never creates duplicate financial rows.
+2. **Consolidated Dashboard (`/dashboard` & `/home`)**:
+   - Filterable by date range (*Today*, *7 days*, *30 days*, *Custom*, *All*).
+   - Consolidates total revenue, expenses, net margins, and active modules.
+   - Queries exclusively through the public `getModuleSummaries` contract and shared finance functions (`getFinanceSummary`, `getFinanceByModule`, `getFinanceTimeline`).
+   - Rendered with dynamic responsive SVG area/line trends and per-module metric breakdown cards.
+
+---
+
+## 10. Webhooks Engine & Queue
+1. **Lifecycle Event Dispatches**:
+   - `subscription.activated`, `subscription.expired`, `module.activated`, `module.deactivated`, `user.role_changed`.
+2. **Payload Cryptographic Verification**:
+   - Inbound requests signed via `x-kazibox-signature: sha256=<hex_digest>`.
+3. **Queue & Administration (`/admin/webhooks`)**:
+   - Gated strictly for `platform_admin`.
+   - Tracks delivery status (`delivered`, `pending`, `failed`), attempt counts, and enables manual event retries.
+
+---
+
+## 11. Reference Demo Module (`/modules/demo` & `/m/demo`)
+1. **Contract Isolation**:
+   - Consumes exclusively the public contracts (`issueModuleToken` / `verifyModuleToken`, `/api/v1/context`, `/api/v1/subscription`, `/api/v1/finance/*`).
+   - Exposes `getDemoSummary` conforming to `ModuleSummary` contract for platform dashboard ingestion.
+2. **PWA Compliance**:
+   - Registered in Module Registry with 100% score on the 6-point checklist.
+
+

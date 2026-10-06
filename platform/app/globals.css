@@ -65,6 +65,27 @@ select {
   border: 1px solid rgba(229, 231, 235, 0.8);
 }
 
+.bg-pattern-dots {
+  background-image: radial-gradient(rgba(109, 40, 217, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.gradient-brand {
+  background: linear-gradient(135deg, #6D28D9 0%, #7C3AED 50%, #4C1D95 100%);
+}
+
+.gradient-gold {
+  background: linear-gradient(135deg, #FACC15 0%, #FBBF24 100%);
+}
+
+.badge-glow-purple {
+  box-shadow: 0 0 12px rgba(109, 40, 217, 0.25);
+}
+
+.badge-glow-gold {
+  box-shadow: 0 0 12px rgba(250, 204, 21, 0.35);
+}
+
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -94,5 +115,5 @@ select {
 }
 
 .animate-fade-in {
-  animation: fadeInSlide 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fadeInSlide 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

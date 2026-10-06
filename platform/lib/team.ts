@@ -1,5 +1,6 @@
 import { TeamMember, UserRole } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
+import { dispatchWebhookEvent } from './webhooks';
 
 /**
  * Fetch team members for a company
@@ -69,8 +70,19 @@ export async function updateMemberRole(
     return { data: null, error: new Error('Membre introuvable') };
   }
 
+  const oldRole = store.members[idx].role;
   store.members[idx].role = newRole;
   setStoreItem('MEMBERS', store.members);
+
+  // Dispatch webhook event to active modules
+  await dispatchWebhookEvent('user.role_changed', {
+    workspaceId: companyId,
+    memberId,
+    userId: store.members[idx].user_id,
+    previousRole: oldRole,
+    newRole,
+    updatedAt: new Date().toISOString(),
+  });
 
   return { data: store.members[idx], error: null };
 }
