@@ -235,7 +235,12 @@
     "coming_soon": "Coming soon",
     "view_only": "Read only",
     "staff_no_billing": "Activation reserved for workspace owner",
-    "external_developer": "Third-party partner"
+    "external_developer": "Third-party partner",
+    "compliant": "Compliant",
+    "isolated": "100% Isolated",
+    "type_external": "Third-Party (External SDK)",
+    "type_native": "Native (Internal)",
+    "module_not_found": "Module not found"
   },
   "my_modules": {
     "title": "My Activated Modules",
@@ -294,7 +299,18 @@
     "workspace_consolidated_charge": "Consolidated workspace-level billing",
     "yearly_cycle": "Yearly cycle",
     "monthly_cycle": "Monthly cycle",
-    "status_expired": "Expired"
+    "status_expired": "Expired",
+    "bundle_limit": "The Multi-Business pack includes a maximum of 3 modules.",
+    "invoice": "Invoice",
+    "date": "Date",
+    "plan": "Plan",
+    "method": "Method",
+    "amount": "Amount",
+    "status": "Status",
+    "receipt": "Receipt",
+    "included": "Included",
+    "invoices_count": "invoices",
+    "download_pdf": "PDF Receipt"
   },
   "admin": {
     "registry_nav": "Module Registry",

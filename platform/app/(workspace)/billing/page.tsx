@@ -118,7 +118,7 @@ export default function BillingPage() {
         if (selectedModuleIds.length < 3) {
           setSelectedModuleIds([...selectedModuleIds, modId]);
         } else {
-          alert('Le pack Multi-Métiers comprend un maximum de 3 modules.');
+          alert(t('billing.bundle_limit'));
         }
       }
       return;
@@ -337,7 +337,7 @@ export default function BillingPage() {
                               : mod.name?.[language as 'fr' | 'en'] || mod.name?.fr}
                           </p>
                           <span className="text-[10px] text-[#059669] font-semibold">
-                            ✓ Inclus
+                            ✓ {t('billing.included')}
                           </span>
                         </div>
                       </div>
@@ -355,13 +355,13 @@ export default function BillingPage() {
                   {t('billing.next_renewal_label')} :{' '}
                   <strong className="text-[#1F2937]">
                     {subscription?.renewAt
-                      ? new Date(subscription.renewAt).toLocaleDateString()
+                      ? new Date(subscription.renewAt).toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US')
                       : '01/11/2026'}
                   </strong>
                 </span>
                 <span>
                   {t('billing.payment_channel_label')} :{' '}
-                  <strong className="text-[#1F2937]">Mobile Money / Carte</strong>
+                  <strong className="text-[#1F2937]">Mobile Money / Card</strong>
                 </span>
               </div>
             </div>
@@ -379,7 +379,7 @@ export default function BillingPage() {
                 </p>
               </div>
               <Badge variant="purple" size="sm">
-                {paymentHistory.length} factures
+                {paymentHistory.length} {t('billing.invoices_count')}
               </Badge>
             </div>
 
@@ -387,13 +387,13 @@ export default function BillingPage() {
               <table className="w-full text-left text-xs sm:text-sm">
                 <thead>
                   <tr className="border-b border-[#E5E7EB] text-[#6B7280] text-[11px] uppercase tracking-wider font-bold">
-                    <th className="py-3 px-2">Facture</th>
-                    <th className="py-3 px-2">Date</th>
-                    <th className="py-3 px-2">Formule</th>
-                    <th className="py-3 px-2">Moyen</th>
-                    <th className="py-3 px-2 text-right">Montant</th>
-                    <th className="py-3 px-2 text-center">Statut</th>
-                    <th className="py-3 px-2 text-right">Reçu</th>
+                    <th className="py-3 px-2">{t('billing.invoice')}</th>
+                    <th className="py-3 px-2">{t('billing.date')}</th>
+                    <th className="py-3 px-2">{t('billing.plan')}</th>
+                    <th className="py-3 px-2">{t('billing.method')}</th>
+                    <th className="py-3 px-2 text-right">{t('billing.amount')}</th>
+                    <th className="py-3 px-2 text-center">{t('billing.status')}</th>
+                    <th className="py-3 px-2 text-right">{t('billing.receipt')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F3F4F6]">
@@ -403,7 +403,7 @@ export default function BillingPage() {
                         {row.invoiceNumber}
                       </td>
                       <td className="py-3 px-2 text-[#4B5563]">
-                        {new Date(row.date).toLocaleDateString()}
+                        {new Date(row.date).toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US')}
                       </td>
                       <td className="py-3 px-2 font-medium text-[#1F2937]">
                         {row.planName}
@@ -419,12 +419,12 @@ export default function BillingPage() {
                           variant={row.status === 'paid' ? 'green' : 'gray'}
                           size="sm"
                         >
-                          {row.status === 'paid' ? 'Payé' : 'Échoué'}
+                          {row.status === 'paid' ? (language === 'fr' ? 'Payé' : 'Paid') : (language === 'fr' ? 'Échoué' : 'Failed')}
                         </Badge>
                       </td>
                       <td className="py-3 px-2 text-right">
                         <button
-                          onClick={() => alert(`Téléchargement reçu ${row.invoiceNumber}`)}
+                          onClick={() => alert(`${t('billing.download_pdf')} : ${row.invoiceNumber}`)}
                           className="text-[var(--kazibox-primary,#6D28D9)] font-bold text-xs hover:underline cursor-pointer"
                         >
                           PDF

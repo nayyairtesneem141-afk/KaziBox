@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import fr from '../locales/fr.json';
 import en from '../locales/en.json';
 import { platformConfig } from '../config';
@@ -19,67 +19,94 @@ interface I18nContextType {
 }
 
 const I18nContext = createContext<I18nContextType>({
-  language: platformConfig.defaultLanguage,
+  language: platformConfig.defaultLanguage as Language,
   setLanguage: () => {},
   t: (key) => key,
 });
 
 export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [language, setLanguageState] = useState<Language>(platformConfig.defaultLanguage);
+  const [language, setLanguageState] = useState<Language>(
+    (platformConfig.defaultLanguage as Language) || 'fr'
+  );
 
   useEffect(() => {
     // Load persisted language preference
-    const saved = localStorage.getItem('kazibox_lang') as Language;
-    if (saved && (saved === 'fr' || saved === 'en')) {
-      setLanguageState(saved);
+    try {
+      const saved = localStorage.getItem('kazibox_lang') as Language;
+      if (saved && (saved === 'fr' || saved === 'en')) {
+        setLanguageState(saved);
+        document.documentElement.lang = saved;
+      }
+    } catch {
+      // Ignore in restricted environments
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'kazibox_lang' && (e.newValue === 'fr' || e.newValue === 'en')) {
+        setLanguageState(e.newValue as Language);
+        document.documentElement.lang = e.newValue;
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  const setLanguage = useCallback((lang: Language) => {
+    setLanguageState(lang);
+    try {
+      localStorage.setItem('kazibox_lang', lang);
+      document.cookie = `kazibox_lang=${lang}; path=/; max-age=31536000; SameSite=Lax`;
+      document.documentElement.lang = lang;
+      window.dispatchEvent(new CustomEvent('kazibox:languageChanged', { detail: lang }));
+    } catch (err) {
+      console.warn('Could not persist language preference:', err);
     }
   }, []);
 
-  const setLanguage = (lang: Language) => {
-    setLanguageState(lang);
-    localStorage.setItem('kazibox_lang', lang);
-    document.cookie = `kazibox_lang=${lang}; path=/; max-age=31536000; SameSite=Lax`;
-    document.documentElement.lang = lang;
-  };
+  const t = useCallback(
+    (key: string, params?: Record<string, string | number>): string => {
+      if (!key) return '';
+      const keys = key.split('.');
+      let current = translations[language] || translations.fr;
 
-  const t = (key: string, params?: Record<string, string | number>): string => {
-    const keys = key.split('.');
-    let current = translations[language] || translations.fr;
-
-    for (const k of keys) {
-      if (current && typeof current === 'object' && k in current) {
-        current = current[k];
-      } else {
-        // Fallback to French if missing
-        let fallback = translations.fr;
-        for (const fbKey of keys) {
-          if (fallback && typeof fallback === 'object' && fbKey in fallback) {
-            fallback = fallback[fbKey];
-          } else {
-            return key;
+      for (const k of keys) {
+        if (current && typeof current === 'object' && k in current) {
+          current = current[k];
+        } else {
+          // Fallback to French if missing in current locale
+          let fallback = translations.fr;
+          for (const fbKey of keys) {
+            if (fallback && typeof fallback === 'object' && fbKey in fallback) {
+              fallback = fallback[fbKey];
+            } else {
+              return key;
+            }
           }
+          current = fallback;
+          break;
         }
-        current = fallback;
-        break;
       }
-    }
 
-    if (typeof current !== 'string') {
-      return key;
-    }
+      if (typeof current !== 'string') {
+        return key;
+      }
 
-    let text = current;
-    // Substitute {platformName} automatically
-    text = text.replace(/{platformName}/g, platformConfig.platformName);
+      let text = current;
+      // Substitute {platformName} automatically
+      text = text.replace(/{platformName}/g, platformConfig.platformName);
 
-    if (params) {
-      Object.entries(params).forEach(([pKey, pVal]) => {
-        text = text.replace(new RegExp(`{${pKey}}`, 'g'), String(pVal));
-      });
-    }
+      if (params) {
+        Object.entries(params).forEach(([pKey, pVal]) => {
+          text = text.replace(new RegExp(`{${pKey}}`, 'g'), String(pVal));
+          text = text.replace(new RegExp(`{{${pKey}}}`, 'g'), String(pVal));
+        });
+      }
 
-    return text;
-  };
+      return text;
+    },
+    [language]
+  );
 
   return (
     <I18nContext.Provider value={{ language, setLanguage, t }}>

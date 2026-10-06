@@ -54,7 +54,7 @@ export default function ModulePresentationPage() {
   if (!moduleData) {
     return (
       <div className="max-w-md mx-auto my-12 text-center">
-        <h2 className="text-xl font-bold text-[#1F2937] mb-2">Module introuvable</h2>
+        <h2 className="text-xl font-bold text-[#1F2937] mb-2">{t('catalogue.module_not_found')}</h2>
         <Link href="/modules/catalogue">
           <Button variant="outline">&larr; {t('catalogue.back_to_catalogue')}</Button>
         </Link>
@@ -89,7 +89,7 @@ export default function ModulePresentationPage() {
   const isComingSoon = moduleData.status === 'coming_soon';
 
   const priceStr = moduleData.pricePerMonth
-    ? `${moduleData.pricePerMonth.amount.toLocaleString()} ${moduleData.pricePerMonth.currency} / mois`
+    ? `${moduleData.pricePerMonth.amount.toLocaleString()} ${moduleData.pricePerMonth.currency} ${t('billing.per_month')}`
     : t('billing.custom_price');
 
   const handleActivate = async () => {
@@ -388,18 +388,18 @@ export default function ModulePresentationPage() {
 
               <div className="py-2.5 flex items-center justify-between">
                 <span className="text-[#6B7280]">PWA Standard</span>
-                <span className="font-bold text-[#059669]">✓ Conforme</span>
+                <span className="font-bold text-[#059669]">✓ {t('catalogue.compliant')}</span>
               </div>
 
               <div className="py-2.5 flex items-center justify-between">
                 <span className="text-[#6B7280]">{t('catalogue.financial_isolation')}</span>
-                <span className="font-bold text-[#6D28D9]">100% Séparé</span>
+                <span className="font-bold text-[#6D28D9]">{t('catalogue.isolated')}</span>
               </div>
 
               <div className="py-2.5 flex items-center justify-between">
                 <span className="text-[#6B7280]">Type</span>
                 <span className="font-bold capitalize text-[#1F2937]">
-                  {moduleData.kind === 'external' ? 'Tiers (External SDK)' : 'Natif (Internal)'}
+                  {moduleData.kind === 'external' ? t('catalogue.type_external') : t('catalogue.type_native')}
                 </span>
               </div>
 

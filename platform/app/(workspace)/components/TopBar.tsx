@@ -170,24 +170,29 @@ export const TopBar: React.FC = () => {
       {/* Right Controls: Language Switch, Notifications, Account Menu */}
       <div className="flex items-center gap-2 sm:gap-4">
         {/* Language Switch */}
-        <div className="flex items-center bg-[#F3F4F6] rounded-xl p-1 border border-[#E5E7EB]">
+        <div className="flex items-center bg-gray-100/90 rounded-2xl p-1 border border-[#E5E7EB] shadow-inner">
+          <span className="text-xs px-2 text-[#9CA3AF] hidden lg:inline-flex items-center gap-1 font-bold">
+            🌐
+          </span>
           <button
             onClick={() => setLanguage('fr')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold min-h-[36px] transition-colors ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-black min-h-[36px] transition-all cursor-pointer ${
               language === 'fr'
-                ? 'bg-[var(--kazibox-primary,#6D28D9)] text-white shadow-sm'
-                : 'text-[#6B7280] hover:text-[#1F2937]'
+                ? 'bg-[var(--kazibox-primary,#6D28D9)] text-white shadow-[0_2px_8px_rgba(109,40,217,0.35)] scale-100'
+                : 'text-[#6B7280] hover:text-[#1F2937] hover:bg-white/60'
             }`}
+            title="Français"
           >
             FR
           </button>
           <button
             onClick={() => setLanguage('en')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold min-h-[36px] transition-colors ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-black min-h-[36px] transition-all cursor-pointer ${
               language === 'en'
-                ? 'bg-[var(--kazibox-primary,#6D28D9)] text-white shadow-sm'
-                : 'text-[#6B7280] hover:text-[#1F2937]'
+                ? 'bg-[var(--kazibox-primary,#6D28D9)] text-white shadow-[0_2px_8px_rgba(109,40,217,0.35)] scale-100'
+                : 'text-[#6B7280] hover:text-[#1F2937] hover:bg-white/60'
             }`}
+            title="English"
           >
             EN
           </button>

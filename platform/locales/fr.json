@@ -235,7 +235,12 @@
     "coming_soon": "Bientôt disponible",
     "view_only": "Consultation",
     "staff_no_billing": "Activation réservée au propriétaire de l'espace",
-    "external_developer": "Partenaire externe"
+    "external_developer": "Partenaire externe",
+    "compliant": "Conforme",
+    "isolated": "100% Séparé",
+    "type_external": "Tiers (SDK Externe)",
+    "type_native": "Natif (Interne)",
+    "module_not_found": "Module introuvable"
   },
   "my_modules": {
     "title": "Mes Modules Activés",
@@ -294,7 +299,18 @@
     "workspace_consolidated_charge": "Facturation centralisée au niveau de l'espace",
     "yearly_cycle": "Cycle annuel",
     "monthly_cycle": "Cycle mensuel",
-    "status_expired": "Expiré"
+    "status_expired": "Expiré",
+    "bundle_limit": "Le pack Multi-Métiers comprend un maximum de 3 modules.",
+    "invoice": "Facture",
+    "date": "Date",
+    "plan": "Formule",
+    "method": "Moyen",
+    "amount": "Montant",
+    "status": "Statut",
+    "receipt": "Reçu",
+    "included": "Inclus",
+    "invoices_count": "factures",
+    "download_pdf": "Reçu PDF"
   },
   "admin": {
     "registry_nav": "Registre Modules",

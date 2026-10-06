@@ -16,16 +16,16 @@ export const Card: React.FC<CardProps> = ({
     none: '',
     sm: 'p-4',
     md: 'p-6',
-    lg: 'p-8',
+    lg: 'p-7 sm:p-8',
   };
 
   const hoverClass = hoverEffect
-    ? 'transition-all duration-200 hover:shadow-md hover:border-[#D1D5DB]'
+    ? 'transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_16px_32px_-8px_rgba(109,40,217,0.12),0_4px_12px_-2px_rgba(0,0,0,0.04)] hover:border-[#DDD6FE]'
     : '';
 
   return (
     <div
-      className={`bg-white rounded-2xl border border-[var(--kazibox-border,#E5E7EB)] shadow-sm ${paddingMap[padding]} ${hoverClass} ${className}`}
+      className={`bg-white rounded-3xl border border-[#E5E7EB] shadow-[0_2px_10px_-2px_rgba(0,0,0,0.04),0_1px_4px_-1px_rgba(0,0,0,0.02)] ${paddingMap[padding]} ${hoverClass} ${className}`}
       {...props}
     >
       {children}
@@ -48,7 +48,7 @@ export const CardTitle: React.FC<React.HTMLAttributes<HTMLHeadingElement>> = ({
   className = '',
   ...props
 }) => (
-  <h3 className={`text-xl font-bold text-[#1F2937] tracking-tight ${className}`} {...props}>
+  <h3 className={`text-xl font-black text-[#1F2937] tracking-tight ${className}`} {...props}>
     {children}
   </h3>
 );
@@ -58,9 +58,19 @@ export const CardDescription: React.FC<React.HTMLAttributes<HTMLParagraphElement
   className = '',
   ...props
 }) => (
-  <p className={`text-sm text-[#6B7280] mt-1 ${className}`} {...props}>
+  <p className={`text-sm text-[#6B7280] mt-1 leading-relaxed ${className}`} {...props}>
     {children}
   </p>
+);
+
+export const CardContent: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
+  children,
+  className = '',
+  ...props
+}) => (
+  <div className={`text-[#374151] ${className}`} {...props}>
+    {children}
+  </div>
 );
 
 export const CardFooter: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
@@ -68,7 +78,7 @@ export const CardFooter: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
   className = '',
   ...props
 }) => (
-  <div className={`border-t border-[#E5E7EB] pt-4 mt-6 flex items-center justify-end gap-3 ${className}`} {...props}>
+  <div className={`border-t border-[#E5E7EB] pt-4 mt-5 flex items-center justify-between ${className}`} {...props}>
     {children}
   </div>
 );
