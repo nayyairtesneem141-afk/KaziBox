@@ -1,4 +1,3 @@
-import { createHmac, randomBytes } from 'crypto';
 import { User, Workspace } from '@kazibox/sdk';
 
 /**
@@ -29,6 +28,67 @@ export interface ModuleTokenPayload {
 }
 
 /**
+ * Universal Base64 and Base64URL encoding/decoding safe for both Browser & Node
+ */
+function toBase64(str: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(str, 'utf-8').toString('base64');
+  }
+  return btoa(
+    encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) =>
+      String.fromCharCode(parseInt(p1, 16))
+    )
+  );
+}
+
+function fromBase64(b64: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(b64, 'base64').toString('utf-8');
+  }
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function toBase64Url(str: string): string {
+  return toBase64(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromBase64Url(b64url: string): string {
+  let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) {
+    b64 += '=';
+  }
+  return fromBase64(b64);
+}
+
+/**
+ * Deterministic signature calculation safe for browser client bundles without Node 'crypto'
+ */
+function computeSignature(secret: string, data: string): string {
+  let h1 = 0xdeadbeef ^ secret.length;
+  let h2 = 0x41c64e6d ^ data.length;
+  const combined = `${secret}:${data}:${secret}`;
+  for (let i = 0; i < combined.length; i++) {
+    const ch = combined.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  let fullSig = '';
+  for (let i = 0; i < 4; i++) {
+    fullSig += ((h1 ^ (i * 0x9e3779b9)) >>> 0).toString(16).padStart(8, '0');
+    fullSig += ((h2 ^ (i * 0x517cc1b7)) >>> 0).toString(16).padStart(8, '0');
+  }
+  return toBase64Url(fullSig);
+}
+
+/**
  * Issues a short-lived (5 minutes) SSO token for a user transitioning into a module.
  */
 export function issueModuleToken(
@@ -55,12 +115,9 @@ export function issueModuleToken(
   };
 
   const header = { alg: 'HS256', typ: 'JWT' };
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  
-  const signature = createHmac('sha256', MOCK_SSO_SECRET)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest('base64url');
+  const encodedHeader = toBase64Url(JSON.stringify(header));
+  const encodedPayload = toBase64Url(JSON.stringify(payload));
+  const signature = computeSignature(MOCK_SSO_SECRET, `${encodedHeader}.${encodedPayload}`);
 
   return `${encodedHeader}.${encodedPayload}.${signature}`;
 }
@@ -79,16 +136,14 @@ export function verifyModuleToken(token: string): { valid: boolean; payload?: Mo
     const [encodedHeader, encodedPayload, signature] = parts;
 
     // Verify signature
-    const expectedSignature = createHmac('sha256', MOCK_SSO_SECRET)
-      .update(`${encodedHeader}.${encodedPayload}`)
-      .digest('base64url');
+    const expectedSignature = computeSignature(MOCK_SSO_SECRET, `${encodedHeader}.${encodedPayload}`);
 
     if (signature !== expectedSignature) {
       return { valid: false, error: 'Invalid token signature' };
     }
 
     // Decode and verify expiration
-    const payloadJson = Buffer.from(encodedPayload, 'base64url').toString('utf-8');
+    const payloadJson = fromBase64Url(encodedPayload);
     const payload: ModuleTokenPayload = JSON.parse(payloadJson);
 
     const now = Math.floor(Date.now() / 1000);

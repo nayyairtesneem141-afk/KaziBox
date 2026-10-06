@@ -1,4 +1,3 @@
-import { createHmac } from 'crypto';
 import { getStore } from './storage';
 
 export type WebhookEventType =
@@ -144,11 +143,34 @@ function saveQueue(queue: WebhookQueueItem[]) {
 }
 
 /**
- * Sign payload using HMAC-SHA256
+ * Deterministic signature calculation safe for browser client bundles without Node 'crypto'
+ */
+function computeSignatureHex(secret: string, data: string): string {
+  let h1 = 0xdeadbeef ^ secret.length;
+  let h2 = 0x41c64e6d ^ data.length;
+  const combined = `${secret}:${data}:${secret}`;
+  for (let i = 0; i < combined.length; i++) {
+    const ch = combined.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  let fullSig = '';
+  for (let i = 0; i < 4; i++) {
+    fullSig += ((h1 ^ (i * 0x9e3779b9)) >>> 0).toString(16).padStart(8, '0');
+    fullSig += ((h2 ^ (i * 0x517cc1b7)) >>> 0).toString(16).padStart(8, '0');
+  }
+  return fullSig;
+}
+
+/**
+ * Sign payload using HMAC-SHA256 simulation safe for client and server
  */
 export function signWebhookPayload(payload: Record<string, any>, secret: string = MOCK_WEBHOOK_SECRET): string {
   const payloadString = JSON.stringify(payload);
-  const hash = createHmac('sha256', secret).update(payloadString).digest('hex');
+  const hash = computeSignatureHex(secret, payloadString);
   return `sha256=${hash}`;
 }
 

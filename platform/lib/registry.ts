@@ -113,7 +113,8 @@ export async function createApiKey(moduleId: string): Promise<{
   const randomBytes = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
   const prefix = `kz_live_${randomBytes.substring(0, 6)}`;
   const secret = `${prefix}_sec_${randomBytes}${Date.now().toString(36)}`;
-  const hashedSecret = `sha256_mock_${Buffer.from(secret).toString('base64').substring(0, 16)}`;
+  const b64 = typeof Buffer !== 'undefined' ? Buffer.from(secret).toString('base64') : (typeof btoa !== 'undefined' ? btoa(secret) : secret);
+  const hashedSecret = `sha256_mock_${b64.substring(0, 16)}`;
 
   const keyRecord: StoredApiKey = {
     id: `key-${Date.now()}`,

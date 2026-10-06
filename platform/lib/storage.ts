@@ -843,7 +843,23 @@ export const getStore = () => {
   const getOrSet = <T>(key: string, initial: T): T => {
     try {
       const stored = localStorage.getItem(key);
-      if (stored) return JSON.parse(stored);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && Array.isArray(initial)) {
+          const existingIds = new Set(parsed.map((p: any) => p?.id).filter(Boolean));
+          let changed = false;
+          for (const item of initial as any[]) {
+            if (item?.id && !existingIds.has(item.id)) {
+              parsed.push(item);
+              changed = true;
+            }
+          }
+          if (changed) {
+            localStorage.setItem(key, JSON.stringify(parsed));
+          }
+        }
+        return parsed;
+      }
       localStorage.setItem(key, JSON.stringify(initial));
       return initial;
     } catch {
