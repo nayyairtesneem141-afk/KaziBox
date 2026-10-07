@@ -11,8 +11,8 @@ import {
 // Default mock workspaces
 export const INITIAL_WORKSPACES: Workspace[] = [
   {
-    id: 'ws-palmeraie-01',
-    company_id: 'ws-palmeraie-01',
+    id: '11111111-1111-4111-8111-111111111111',
+    company_id: '11111111-1111-4111-8111-111111111111',
     name: 'Hôtel & Résidence Palmeraie',
     country: 'Côte d’Ivoire',
     currency: 'XOF',
@@ -23,8 +23,8 @@ export const INITIAL_WORKSPACES: Workspace[] = [
     status: 'active',
   },
   {
-    id: 'ws-garage-02',
-    company_id: 'ws-garage-02',
+    id: '22222222-2222-4222-8222-222222222222',
+    company_id: '22222222-2222-4222-8222-222222222222',
     name: 'Garage & Mécanique Express',
     country: 'Sénégal',
     currency: 'XOF',
@@ -43,7 +43,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
     email: 'owner@palmeraie.com',
     name: 'Mamadou Diallo',
     role: 'owner',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     phone: '+225 07 12 34 56',
     created_at: '2026-01-15T08:00:00Z',
     password_hash: 'password123',
@@ -53,7 +53,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
     email: 'manager@palmeraie.com',
     name: 'Fatou Cissé',
     role: 'manager',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     phone: '+225 05 98 76 54',
     created_at: '2026-01-16T09:00:00Z',
     password_hash: 'password123',
@@ -63,7 +63,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
     email: 'worker@palmeraie.com',
     name: 'Kouamé Koffi',
     role: 'worker',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     phone: '+225 01 23 45 67',
     created_at: '2026-01-20T11:00:00Z',
     password_hash: 'password123',
@@ -73,7 +73,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
     email: 'owner@autoexpress.sn',
     name: 'Ibrahima Ndiaye',
     role: 'owner',
-    company_id: 'ws-garage-02',
+    company_id: '22222222-2222-4222-8222-222222222222',
     phone: '+221 77 654 32 10',
     created_at: '2026-02-10T10:30:00Z',
     password_hash: 'password123',
@@ -83,7 +83,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
     email: 'admin@kazibox.com',
     name: 'Amadou Ba',
     role: 'platform_admin',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     phone: '+225 07 00 00 01',
     created_at: '2026-01-01T00:00:00Z',
     password_hash: 'password123',
@@ -93,7 +93,7 @@ export const INITIAL_USERS: (User & { password_hash: string })[] = [
 export const INITIAL_MEMBERS: TeamMember[] = [
   {
     id: 'tm-1',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     user_id: 'usr-owner-01',
     name: 'Mamadou Diallo',
     email: 'owner@palmeraie.com',
@@ -103,7 +103,7 @@ export const INITIAL_MEMBERS: TeamMember[] = [
   },
   {
     id: 'tm-2',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     user_id: 'usr-manager-02',
     name: 'Fatou Cissé',
     email: 'manager@palmeraie.com',
@@ -113,7 +113,7 @@ export const INITIAL_MEMBERS: TeamMember[] = [
   },
   {
     id: 'tm-3',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     user_id: 'usr-worker-03',
     name: 'Kouamé Koffi',
     email: 'worker@palmeraie.com',
@@ -123,7 +123,7 @@ export const INITIAL_MEMBERS: TeamMember[] = [
   },
   {
     id: 'tm-4',
-    company_id: 'ws-garage-02',
+    company_id: '22222222-2222-4222-8222-222222222222',
     user_id: 'usr-owner-sn-04',
     name: 'Ibrahima Ndiaye',
     email: 'owner@autoexpress.sn',
@@ -136,7 +136,7 @@ export const INITIAL_MEMBERS: TeamMember[] = [
 export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   {
     id: 'notif-1',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     title: 'Module Hôtel actif',
     message: 'Votre module Hôtel & Résidence est opérationnel avec votre formule Single.',
     type: 'success',
@@ -146,7 +146,7 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   },
   {
     id: 'notif-2',
-    company_id: 'ws-palmeraie-01',
+    company_id: '11111111-1111-4111-8111-111111111111',
     title: 'Abonnement activé',
     message: 'Le paiement de votre abonnement mensuel a été validé avec succès.',
     type: 'info',
@@ -156,7 +156,7 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   },
   {
     id: 'notif-3',
-    company_id: 'ws-garage-02',
+    company_id: '22222222-2222-4222-8222-222222222222',
     title: 'Abonnement expiré',
     message: 'Votre abonnement a expiré. Renouvelez-le pour réactiver vos modules.',
     type: 'alert',
@@ -667,12 +667,10 @@ export const INITIAL_MODULES: ModuleManifest[] = [
 ];
 
 // Initial Subscriptions
-// Demo workspace ws-palmeraie-01 has 1 active subscription covering Hotel module
-// ws-garage-02 has 1 expired subscription covering Garage module
 export const INITIAL_SUBSCRIPTIONS: Subscription[] = [
   {
     id: 'sub-palmeraie-01',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     planId: 'single',
     status: 'active',
     billingCycle: 'monthly',
@@ -686,7 +684,7 @@ export const INITIAL_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'sub-garage-02',
-    companyId: 'ws-garage-02',
+    companyId: '22222222-2222-4222-8222-222222222222',
     planId: 'single',
     status: 'expired',
     billingCycle: 'monthly',
@@ -705,7 +703,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-6',
     invoiceNumber: 'INV-2026-006',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-10-01T08:30:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -719,7 +717,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-5',
     invoiceNumber: 'INV-2026-005',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-09-01T08:15:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -733,7 +731,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-4',
     invoiceNumber: 'INV-2026-004',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-08-01T09:00:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -747,7 +745,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-3',
     invoiceNumber: 'INV-2026-003',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-07-01T08:45:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -761,7 +759,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-2',
     invoiceNumber: 'INV-2026-002',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-06-01T08:00:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -775,7 +773,7 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   {
     id: 'pay-1',
     invoiceNumber: 'INV-2026-001',
-    companyId: 'ws-palmeraie-01',
+    companyId: '11111111-1111-4111-8111-111111111111',
     date: '2026-05-01T10:12:00Z',
     amount: 15000,
     currency: 'XOF',
@@ -796,22 +794,7 @@ export interface StoredApiKey {
   createdAt: string;
 }
 
-export const INITIAL_API_KEYS: StoredApiKey[] = [
-  {
-    id: 'key-demo',
-    moduleId: 'demo',
-    prefix: 'kz_live_demo...',
-    hashedSecret: 'sha256_mock_kz_live_demo_sec',
-    createdAt: '2026-03-01T10:00:00Z',
-  },
-  {
-    id: 'key-hotel',
-    moduleId: 'hotel-property',
-    prefix: 'kz_live_hotel...',
-    hashedSecret: 'sha256_mock_kz_live_hotel_sec',
-    createdAt: '2026-03-01T10:00:00Z',
-  },
-];
+export const INITIAL_API_KEYS: StoredApiKey[] = [];
 
 // Persistent state accessor for browser & SSR
 const STORAGE_KEYS = {

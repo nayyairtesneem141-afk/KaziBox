@@ -317,7 +317,7 @@ export async function getPaymentHistory(companyId: string): Promise<PaymentHisto
 
   const store = getStore();
   return store.payments
-    .filter((p) => p.companyId === companyId || !p.companyId || companyId === 'ws-palmeraie-01')
+    .filter((p) => p.companyId === companyId || !p.companyId || companyId === '11111111-1111-4111-8111-111111111111')
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 

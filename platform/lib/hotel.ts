@@ -77,6 +77,15 @@ const DEFAULT_INITIAL_GUESTS: Omit<HotelGuest, 'company_id'>[] = [
   { id: 'gst-3', full_name: 'Emmanuel Mensah', phone: '+233 241234567', email: 'e.mensah@example.gh', id_number: 'GH-991204', nationality: 'Ghanéenne' },
 ];
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function ensureUuidCompanyId(id: string): string {
+  if (id && UUID_REGEX.test(id)) {
+    return id;
+  }
+  return '11111111-1111-4111-8111-111111111111';
+}
+
 /**
  * Get Supabase Client safely
  */
@@ -89,7 +98,8 @@ function getSupabase() {
 /**
  * Fetch all Rooms for Company
  */
-export async function getRooms(companyId: string): Promise<HotelRoom[]> {
+export async function getRooms(companyIdInput: string): Promise<HotelRoom[]> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -126,9 +136,10 @@ export async function getRooms(companyId: string): Promise<HotelRoom[]> {
  * Create a new Room
  */
 export async function createRoom(
-  companyId: string,
+  companyIdInput: string,
   room: Omit<HotelRoom, 'id' | 'company_id' | 'created_at' | 'updated_at'>
 ): Promise<{ success: boolean; room?: HotelRoom; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -182,10 +193,11 @@ export async function createRoom(
  * Update Room Status
  */
 export async function updateRoomStatus(
-  companyId: string,
+  companyIdInput: string,
   roomId: string,
   status: HotelRoom['status']
 ): Promise<{ success: boolean; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
     const { error } = await supabase
@@ -206,7 +218,8 @@ export async function updateRoomStatus(
 /**
  * Fetch all Guests for Company
  */
-export async function getGuests(companyId: string): Promise<HotelGuest[]> {
+export async function getGuests(companyIdInput: string): Promise<HotelGuest[]> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase

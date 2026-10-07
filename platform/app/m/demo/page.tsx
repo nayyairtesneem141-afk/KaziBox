@@ -25,6 +25,7 @@ function DemoModuleContent() {
   const [loadingSub, setLoadingSub] = useState(false);
   const [apiLogs, setApiLogs] = useState<Array<{ time: string; endpoint: string; status: number; data: any }>>([]);
   const [submitting, setSubmitting] = useState<'rev' | 'exp' | 'evt' | null>(null);
+  const [apiKey, setApiKey] = useState('');
 
   // Initialize or verify SSO Token
   useEffect(() => {
@@ -50,8 +51,8 @@ function DemoModuleContent() {
     try {
       const res = await fetch('/api/v1/context', {
         headers: {
-          Authorization: 'Bearer kz_live_demo_sec_9999999999',
-          'X-Workspace-Id': workspace?.company_id || 'ws-palmeraie-01',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+          'X-Workspace-Id': workspace?.company_id || '11111111-1111-4111-8111-111111111111',
         },
       });
       const data = await res.json();
@@ -73,8 +74,8 @@ function DemoModuleContent() {
     try {
       const res = await fetch('/api/v1/subscription', {
         headers: {
-          Authorization: 'Bearer kz_live_demo_sec_9999999999',
-          'X-Workspace-Id': workspace?.company_id || 'ws-palmeraie-01',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+          'X-Workspace-Id': workspace?.company_id || '11111111-1111-4111-8111-111111111111',
         },
       });
       const data = await res.json();
@@ -104,8 +105,8 @@ function DemoModuleContent() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kz_live_demo_sec_9999999999',
-          'X-Workspace-Id': workspace?.company_id || 'ws-palmeraie-01',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+          'X-Workspace-Id': workspace?.company_id || '11111111-1111-4111-8111-111111111111',
         },
         body: JSON.stringify({
           moduleId: 'demo',
@@ -148,8 +149,8 @@ function DemoModuleContent() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kz_live_demo_sec_9999999999',
-          'X-Workspace-Id': workspace?.company_id || 'ws-palmeraie-01',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+          'X-Workspace-Id': workspace?.company_id || '11111111-1111-4111-8111-111111111111',
         },
         body: JSON.stringify({
           moduleId: 'demo',
@@ -191,8 +192,8 @@ function DemoModuleContent() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kz_live_demo_sec_9999999999',
-          'X-Workspace-Id': workspace?.company_id || 'ws-palmeraie-01',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+          'X-Workspace-Id': workspace?.company_id || '11111111-1111-4111-8111-111111111111',
         },
         body: JSON.stringify({
           moduleId: 'demo',

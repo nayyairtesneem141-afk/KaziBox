@@ -59,43 +59,49 @@ ALTER TABLE public.hotel_guests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hotel_reservations ENABLE ROW LEVEL SECURITY;
 
 -- 4. RLS POLICIES FOR HOTEL ROOMS
+DROP POLICY IF EXISTS "Hotel rooms viewable within company" ON public.hotel_rooms;
 CREATE POLICY "Hotel rooms viewable within company"
   ON public.hotel_rooms FOR SELECT
   TO authenticated
-  USING (company_id = get_auth_user_company_id() OR is_platform_admin());
+  USING (company_id IN (SELECT get_auth_user_company_ids()) OR is_platform_admin());
 
+DROP POLICY IF EXISTS "Hotel rooms manageable by company staff" ON public.hotel_rooms;
 CREATE POLICY "Hotel rooms manageable by company staff"
   ON public.hotel_rooms FOR ALL
   TO authenticated
   USING (
-    (company_id = get_auth_user_company_id() AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
+    (company_id IN (SELECT get_auth_user_company_ids()) AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
     OR is_platform_admin()
   );
 
 -- 5. RLS POLICIES FOR HOTEL GUESTS
+DROP POLICY IF EXISTS "Hotel guests viewable within company" ON public.hotel_guests;
 CREATE POLICY "Hotel guests viewable within company"
   ON public.hotel_guests FOR SELECT
   TO authenticated
-  USING (company_id = get_auth_user_company_id() OR is_platform_admin());
+  USING (company_id IN (SELECT get_auth_user_company_ids()) OR is_platform_admin());
 
+DROP POLICY IF EXISTS "Hotel guests manageable by company staff" ON public.hotel_guests;
 CREATE POLICY "Hotel guests manageable by company staff"
   ON public.hotel_guests FOR ALL
   TO authenticated
   USING (
-    (company_id = get_auth_user_company_id() AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
+    (company_id IN (SELECT get_auth_user_company_ids()) AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
     OR is_platform_admin()
   );
 
 -- 6. RLS POLICIES FOR HOTEL RESERVATIONS
+DROP POLICY IF EXISTS "Hotel reservations viewable within company" ON public.hotel_reservations;
 CREATE POLICY "Hotel reservations viewable within company"
   ON public.hotel_reservations FOR SELECT
   TO authenticated
-  USING (company_id = get_auth_user_company_id() OR is_platform_admin());
+  USING (company_id IN (SELECT get_auth_user_company_ids()) OR is_platform_admin());
 
+DROP POLICY IF EXISTS "Hotel reservations manageable by company staff" ON public.hotel_reservations;
 CREATE POLICY "Hotel reservations manageable by company staff"
   ON public.hotel_reservations FOR ALL
   TO authenticated
   USING (
-    (company_id = get_auth_user_company_id() AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
+    (company_id IN (SELECT get_auth_user_company_ids()) AND get_auth_user_role() IN ('owner', 'manager', 'worker', 'platform_admin'))
     OR is_platform_admin()
   );
