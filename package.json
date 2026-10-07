@@ -21,6 +21,6 @@
     "react-dom": "$react-dom"
   },
   "optionalDependencies": {
-    "@next/swc-win32-x64-msvc": "14.2.33"
+    "@next/swc-win32-x64-msvc": "14.2.35"
   }
 }

@@ -2,6 +2,7 @@ import { createBrowserClient } from './supabase/client';
 import { createServerClient } from './supabase/server';
 import { isSupabaseConfigured } from './supabase/config';
 import { recordRevenue } from './finance';
+import { ModuleSummary } from '@kazibox/sdk';
 
 export interface HotelRoom {
   id: string;
@@ -108,7 +109,7 @@ export async function getRooms(companyIdInput: string): Promise<HotelRoom[]> {
       .eq('company_id', companyId)
       .order('room_number', { ascending: true });
 
-    if (!error && data && data.length > 0) {
+    if (!error && data) {
       return data.map((r: any) => ({
         id: r.id,
         company_id: r.company_id,
@@ -125,11 +126,15 @@ export async function getRooms(companyIdInput: string): Promise<HotelRoom[]> {
     }
   }
 
-  // Initial fallback data mapped to companyId
-  return DEFAULT_INITIAL_ROOMS.map((r) => ({
-    ...r,
-    company_id: companyId,
-  }));
+  if (!isSupabaseConfigured()) {
+    // Initial fallback data mapped to companyId only in offline mode
+    return DEFAULT_INITIAL_ROOMS.map((r) => ({
+      ...r,
+      company_id: companyId,
+    }));
+  }
+
+  return [];
 }
 
 /**
@@ -174,9 +179,7 @@ export async function createRoom(
         },
       };
     }
-    if (error) {
-      return { success: false, error: error.message };
-    }
+    return { success: false, error: error?.message || 'Database error creating room' };
   }
 
   const newRoom: HotelRoom = {
@@ -228,7 +231,7 @@ export async function getGuests(companyIdInput: string): Promise<HotelGuest[]> {
       .eq('company_id', companyId)
       .order('created_at', { ascending: false });
 
-    if (!error && data && data.length > 0) {
+    if (!error && data) {
       return data.map((g: any) => ({
         id: g.id,
         company_id: g.company_id,
@@ -243,10 +246,14 @@ export async function getGuests(companyIdInput: string): Promise<HotelGuest[]> {
     }
   }
 
-  return DEFAULT_INITIAL_GUESTS.map((g) => ({
-    ...g,
-    company_id: companyId,
-  }));
+  if (!isSupabaseConfigured()) {
+    return DEFAULT_INITIAL_GUESTS.map((g) => ({
+      ...g,
+      company_id: companyId,
+    }));
+  }
+
+  return [];
 }
 
 /**
@@ -288,9 +295,7 @@ export async function createGuest(
         },
       };
     }
-    if (error) {
-      return { success: false, error: error.message };
-    }
+    return { success: false, error: error?.message || 'Database error creating guest' };
   }
 
   const newGuest: HotelGuest = {
@@ -313,7 +318,7 @@ export async function getReservations(companyId: string): Promise<HotelReservati
       getGuests(companyId),
     ]);
 
-    if (!resResult.error && resResult.data && resResult.data.length > 0) {
+    if (!resResult.error && resResult.data) {
       const roomMap = new Map(roomsList.map((r) => [r.id, r]));
       const guestMap = new Map(guestsList.map((g) => [g.id, g]));
 
@@ -336,58 +341,122 @@ export async function getReservations(companyId: string): Promise<HotelReservati
     }
   }
 
-  // Fallback demo reservation if database empty
-  const rooms = await getRooms(companyId);
-  const guests = await getGuests(companyId);
+  if (!isSupabaseConfigured()) {
+    // Fallback demo reservation if offline mode
+    const rooms = await getRooms(companyId);
+    const guests = await getGuests(companyId);
 
-  const today = new Date().toISOString().split('T')[0];
-  const tomorrow = new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0];
 
-  if (rooms.length > 0 && guests.length > 0) {
-    return [
-      {
-        id: 'res-101',
-        company_id: companyId,
-        room_id: rooms[1].id,
-        guest_id: guests[0].id,
-        check_in_date: today,
-        check_out_date: tomorrow,
-        status: 'checked_in',
-        total_amount: 90000,
-        paid_amount: 90000,
-        currency: 'XOF',
-        notes: 'Payé par Carte Bancaire',
-        room: rooms[1],
-        guest: guests[0],
-      },
-      {
-        id: 'res-201',
-        company_id: companyId,
-        room_id: rooms[2].id,
-        guest_id: guests[1].id,
-        check_in_date: today,
-        check_out_date: tomorrow,
-        status: 'confirmed',
-        total_amount: 150000,
-        paid_amount: 50000,
-        currency: 'XOF',
-        notes: 'Acompte 50,000 XOF versé',
-        room: rooms[2],
-        guest: guests[1],
-      },
-    ];
+    if (rooms.length > 0 && guests.length > 0) {
+      return [
+        {
+          id: 'res-101',
+          company_id: companyId,
+          room_id: rooms[1]?.id || 'room-102',
+          guest_id: guests[0]?.id || 'gst-1',
+          check_in_date: today,
+          check_out_date: tomorrow,
+          status: 'checked_in',
+          total_amount: 90000,
+          paid_amount: 90000,
+          currency: 'XOF',
+          notes: 'Payé par Carte Bancaire',
+          room: rooms[1],
+          guest: guests[0],
+        },
+        {
+          id: 'res-201',
+          company_id: companyId,
+          room_id: rooms[2]?.id || 'room-201',
+          guest_id: guests[1]?.id || 'gst-2',
+          check_in_date: today,
+          check_out_date: tomorrow,
+          status: 'confirmed',
+          total_amount: 150000,
+          paid_amount: 50000,
+          currency: 'XOF',
+          notes: 'Acompte 50,000 XOF versé',
+          room: rooms[2],
+          guest: guests[1],
+        },
+      ];
+    }
   }
 
   return [];
 }
 
 /**
- * Create a new Reservation
+ * Check room availability for date range (helper)
+ */
+export async function checkRoomAvailability(
+  companyIdInput: string,
+  roomId: string,
+  checkInDate: string,
+  checkOutDate: string,
+  excludeReservationId?: string
+): Promise<{ available: boolean; conflictReason?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
+  const checkIn = new Date(checkInDate);
+  const checkOut = new Date(checkOutDate);
+
+  if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime())) {
+    return { available: false, conflictReason: 'Dates de réservation invalides.' };
+  }
+  if (checkOut <= checkIn) {
+    return { available: false, conflictReason: 'La date de départ doit être strictement postérieure à la date d’arrivée.' };
+  }
+
+  const [rooms, reservations] = await Promise.all([
+    getRooms(companyId),
+    getReservations(companyId),
+  ]);
+
+  const room = rooms.find((r) => r.id === roomId);
+  if (room && room.status === 'maintenance') {
+    return { available: false, conflictReason: 'Cette chambre est actuellement en maintenance et ne peut être réservée.' };
+  }
+
+  const overlap = reservations.some((r) => {
+    if (r.room_id !== roomId) return false;
+    if (excludeReservationId && r.id === excludeReservationId) return false;
+    if (r.status !== 'confirmed' && r.status !== 'checked_in') return false;
+    return r.check_in_date < checkOutDate && r.check_out_date > checkInDate;
+  });
+
+  if (overlap) {
+    return {
+      available: false,
+      conflictReason: 'Cette chambre fait déjà l’objet d’une réservation active pour la période sélectionnée.',
+    };
+  }
+
+  return { available: true };
+}
+
+/**
+ * Create a new Reservation with date and overlap validation
  */
 export async function createReservation(
-  companyId: string,
+  companyIdInput: string,
   reservation: Omit<HotelReservation, 'id' | 'company_id' | 'created_at' | 'room' | 'guest'>
 ): Promise<{ success: boolean; reservation?: HotelReservation; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
+
+  // 1. Validate dates and overlaps
+  const availability = await checkRoomAvailability(
+    companyId,
+    reservation.room_id,
+    reservation.check_in_date,
+    reservation.check_out_date
+  );
+
+  if (!availability.available) {
+    return { success: false, error: availability.conflictReason };
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -408,7 +477,7 @@ export async function createReservation(
       .single();
 
     if (!error && data) {
-      // 1. Record revenue in shared finance ledger if paid_amount > 0
+      // 1. Record revenue in shared finance ledger if paid_amount > 0 (idempotent deterministic reference)
       if (reservation.paid_amount > 0) {
         await recordRevenue({
           workspaceId: companyId,
@@ -416,7 +485,7 @@ export async function createReservation(
           amount: reservation.paid_amount,
           currency: reservation.currency || 'XOF',
           source: `Acompte Réservation Chambre (${reservation.check_in_date})`,
-          reference: `REF-HTL-RES-${data.id.substring(0, 8)}`,
+          reference: `REF-HTL-RES-${data.id}`,
         });
       }
 
@@ -476,20 +545,28 @@ export async function createReservation(
  * Check-in Guest (updates reservation to checked_in, room to occupied, records payment in finance)
  */
 export async function checkInGuest(
-  companyId: string,
+  companyIdInput: string,
   reservationId: string,
   roomId: string,
   paidAmountAdd: number = 0,
   currency: string = 'XOF'
 ): Promise<{ success: boolean; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
-    // 1. Fetch reservation to get current paid_amount
+    // 1. Fetch reservation to verify state and get current paid_amount
     const { data: currentRes } = await supabase
       .from('hotel_reservations')
-      .select('paid_amount')
+      .select('status, paid_amount')
       .eq('id', reservationId)
       .maybeSingle();
+
+    if (currentRes?.status === 'checked_in') {
+      return { success: false, error: 'Ce client est déjà enregistré (déjà checked-in).' };
+    }
+    if (currentRes?.status === 'checked_out' || currentRes?.status === 'cancelled') {
+      return { success: false, error: `Impossible de procéder au check-in pour une réservation au statut "${currentRes.status}".` };
+    }
 
     const newPaidAmount = (currentRes?.paid_amount || 0) + paidAmountAdd;
 
@@ -508,7 +585,7 @@ export async function checkInGuest(
     // 3. Update room status to occupied
     await updateRoomStatus(companyId, roomId, 'occupied');
 
-    // 4. Post revenue into shared finance ledger if additional payment received
+    // 4. Post revenue into shared finance ledger with deterministic idempotent reference
     if (paidAmountAdd > 0) {
       await recordRevenue({
         workspaceId: companyId,
@@ -516,7 +593,7 @@ export async function checkInGuest(
         amount: paidAmountAdd,
         currency,
         source: `Paiement Check-in Réservation #${reservationId.substring(0, 8)}`,
-        reference: `REF-HTL-IN-${reservationId.substring(0, 8)}-${Date.now().toString(36)}`,
+        reference: `REF-HTL-IN-${reservationId}`,
       });
     }
 
@@ -531,7 +608,7 @@ export async function checkInGuest(
       amount: paidAmountAdd,
       currency,
       source: `Paiement Check-in Réservation #${reservationId.substring(0, 8)}`,
-      reference: `REF-HTL-IN-${reservationId.substring(0, 8)}`,
+      reference: `REF-HTL-IN-${reservationId}`,
     });
   }
 
@@ -542,21 +619,26 @@ export async function checkInGuest(
  * Check-out Guest (updates reservation to checked_out, room to cleaning/available, records final balance in finance)
  */
 export async function checkOutGuest(
-  companyId: string,
+  companyIdInput: string,
   reservationId: string,
   roomId: string,
   finalPaymentAdd: number = 0,
   nextRoomStatus: 'cleaning' | 'available' = 'cleaning',
   currency: string = 'XOF'
 ): Promise<{ success: boolean; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const supabase = getSupabase();
   if (supabase) {
-    // 1. Fetch reservation
+    // 1. Fetch reservation to guard against duplicate checkout
     const { data: currentRes } = await supabase
       .from('hotel_reservations')
-      .select('paid_amount')
+      .select('status, paid_amount')
       .eq('id', reservationId)
       .maybeSingle();
+
+    if (currentRes?.status === 'checked_out') {
+      return { success: false, error: 'Cette réservation a déjà été clôturée (déjà checked-out).' };
+    }
 
     const newPaidAmount = (currentRes?.paid_amount || 0) + finalPaymentAdd;
 
@@ -575,7 +657,7 @@ export async function checkOutGuest(
     // 3. Update room status to cleaning or available
     await updateRoomStatus(companyId, roomId, nextRoomStatus);
 
-    // 4. Record final payment in shared finance ledger
+    // 4. Record final payment in shared finance ledger with deterministic idempotent reference
     if (finalPaymentAdd > 0) {
       await recordRevenue({
         workspaceId: companyId,
@@ -583,7 +665,7 @@ export async function checkOutGuest(
         amount: finalPaymentAdd,
         currency,
         source: `Règlement Solde Check-out Réservation #${reservationId.substring(0, 8)}`,
-        reference: `REF-HTL-OUT-${reservationId.substring(0, 8)}-${Date.now().toString(36)}`,
+        reference: `REF-HTL-OUT-${reservationId}`,
       });
     }
 
@@ -598,7 +680,7 @@ export async function checkOutGuest(
       amount: finalPaymentAdd,
       currency,
       source: `Règlement Solde Check-out Réservation #${reservationId.substring(0, 8)}`,
-      reference: `REF-HTL-OUT-${reservationId.substring(0, 8)}`,
+      reference: `REF-HTL-OUT-${reservationId}`,
     });
   }
 
@@ -608,7 +690,8 @@ export async function checkOutGuest(
 /**
  * Fetch Consolidated Hotel Dashboard Metrics
  */
-export async function getHotelDashboardMetrics(companyId: string): Promise<HotelDashboardMetrics> {
+export async function getHotelDashboardMetrics(companyIdInput: string): Promise<HotelDashboardMetrics> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
   const [rooms, reservations] = await Promise.all([
     getRooms(companyId),
     getReservations(companyId),
@@ -656,5 +739,50 @@ export async function getHotelDashboardMetrics(companyId: string): Promise<Hotel
     occupancyRate,
     totalRevenue,
     pendingBalance,
+  };
+}
+
+/**
+ * ModuleSummary Contract Exporter for Global Dashboard
+ */
+export async function getHotelSummary(companyIdInput: string): Promise<ModuleSummary> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
+  const metrics = await getHotelDashboardMetrics(companyId);
+
+  return {
+    moduleId: 'hotel-property',
+    companyId,
+    revenue: metrics.totalRevenue,
+    expenses: 0,
+    activityCount: metrics.occupiedRooms + metrics.todayCheckIns,
+    currency: 'XOF',
+    lastUpdated: new Date().toISOString(),
+    metrics: [
+      {
+        id: 'htl-occupancy',
+        moduleId: 'hotel-property',
+        label: { fr: 'Chambres occupées', en: 'Occupied Rooms' },
+        value: `${metrics.occupiedRooms} / ${metrics.totalRooms} (${metrics.occupancyRate}%)`,
+      },
+      {
+        id: 'htl-arrivals',
+        moduleId: 'hotel-property',
+        label: { fr: 'Arrivées du jour', en: "Today's Check-ins" },
+        value: metrics.todayCheckIns,
+      },
+      {
+        id: 'htl-departures',
+        moduleId: 'hotel-property',
+        label: { fr: 'Départs du jour', en: "Today's Check-outs" },
+        value: metrics.todayCheckOuts,
+      },
+      {
+        id: 'htl-pending-balance',
+        moduleId: 'hotel-property',
+        label: { fr: 'Soldes à encaisser', en: 'Pending Balances' },
+        value: metrics.pendingBalance,
+        currency: 'XOF',
+      },
+    ],
   };
 }

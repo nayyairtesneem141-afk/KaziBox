@@ -292,14 +292,12 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
 
     if (modId === 'hotel-property') {
       try {
-        const { getHotelDashboardMetrics } = require('./hotel');
-        const htl = await getHotelDashboardMetrics(companyId);
-        rev = htl.totalRevenue;
-        activity = htl.occupiedRooms + htl.todayCheckIns;
-        metrics = [
-          { id: 'm1', moduleId: modId, label: { fr: 'Chambres occupées', en: 'Occupied Rooms' }, value: `${htl.occupiedRooms} / ${htl.totalRooms} (${htl.occupancyRate}%)` },
-          { id: 'm2', moduleId: modId, label: { fr: 'Arrivées prévues', en: 'Expected Check-ins' }, value: htl.todayCheckIns },
-        ];
+        const { getHotelSummary } = require('./hotel');
+        const htlSummary = await getHotelSummary(companyId);
+        rev = htlSummary.revenue;
+        exp = htlSummary.expenses;
+        activity = htlSummary.activityCount;
+        metrics = htlSummary.metrics || [];
       } catch {
         rev = 450000;
         exp = 87000;

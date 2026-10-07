@@ -131,7 +131,7 @@ export default function HotelModulePage() {
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomNumber.trim()) {
-      showToast('error', 'Veuillez saisir le numéro de chambre.');
+      showToast('error', t('hotel.validation_room_required'));
       return;
     }
     const res = await createRoom(companyId, {
@@ -144,13 +144,13 @@ export default function HotelModulePage() {
       notes: newRoomNotes,
     });
     if (res.success) {
-      showToast('success', `Chambre #${newRoomNumber} ajoutée avec succès.`);
+      showToast('success', `${t('hotel.toast_room_added')} (#${newRoomNumber})`);
       setIsAddRoomOpen(false);
       setNewRoomNumber('');
       setNewRoomNotes('');
       loadData();
     } else {
-      showToast('error', res.error || "Impossible d'ajouter la chambre.");
+      showToast('error', res.error || t('hotel.validation_room_required'));
     }
   };
 
@@ -158,7 +158,7 @@ export default function HotelModulePage() {
   const handleCreateGuest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGuestName.trim()) {
-      showToast('error', 'Veuillez saisir le nom du client.');
+      showToast('error', t('hotel.validation_guest_required'));
       return;
     }
     const res = await createGuest(companyId, {
@@ -169,7 +169,7 @@ export default function HotelModulePage() {
       nationality: newGuestNationality,
     });
     if (res.success) {
-      showToast('success', `Client ${newGuestName} enregistré avec succès.`);
+      showToast('success', `${t('hotel.toast_guest_added')} (${newGuestName})`);
       setIsAddGuestOpen(false);
       setNewGuestName('');
       setNewGuestPhone('');
@@ -178,7 +178,7 @@ export default function HotelModulePage() {
       setNewGuestNationality('');
       loadData();
     } else {
-      showToast('error', res.error || "Impossible d'enregistrer le client.");
+      showToast('error', res.error || t('hotel.validation_guest_required'));
     }
   };
 
@@ -186,7 +186,7 @@ export default function HotelModulePage() {
   const handleCreateReservation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newResGuestId || !newResRoomId) {
-      showToast('error', 'Veuillez sélectionner un client et une chambre.');
+      showToast('error', t('hotel.validation_guest_room_required'));
       return;
     }
     const deposit = parseFloat(newResDeposit) || 0;
@@ -203,7 +203,7 @@ export default function HotelModulePage() {
     });
 
     if (res.success) {
-      showToast('success', 'Réservation créée avec succès ! Acompte enregistré.');
+      showToast('success', t('hotel.toast_res_created'));
       setIsAddResOpen(false);
       setNewResGuestId('');
       setNewResRoomId('');
@@ -219,7 +219,7 @@ export default function HotelModulePage() {
   const handleRoomStatusChange = async (roomId: string, newStatus: HotelRoom['status']) => {
     const res = await updateRoomStatus(companyId, roomId, newStatus);
     if (res.success) {
-      showToast('success', 'Statut de la chambre mis à jour.');
+      showToast('success', t(`hotel.room_status_${newStatus}`) || 'Statut mis à jour.');
       loadData();
     } else {
       showToast('error', res.error || 'Erreur de mise à jour.');
@@ -238,7 +238,7 @@ export default function HotelModulePage() {
       selectedResForCheckIn.currency
     );
     if (res.success) {
-      showToast('success', `Check-in effectué pour la chambre #${selectedResForCheckIn.room?.room_number || ''}`);
+      showToast('success', `${t('hotel.toast_check_in_success')} (#${selectedResForCheckIn.room?.room_number || ''})`);
       setSelectedResForCheckIn(null);
       setCheckInPayment('0');
       loadData();
@@ -260,7 +260,7 @@ export default function HotelModulePage() {
       selectedResForCheckOut.currency
     );
     if (res.success) {
-      showToast('success', `Check-out finalisé. Solde enregistré dans la comptabilité KaziBox.`);
+      showToast('success', t('hotel.toast_check_out_success'));
       setSelectedResForCheckOut(null);
       setCheckOutPayment('0');
       loadData();
@@ -271,35 +271,37 @@ export default function HotelModulePage() {
 
   // Room status badge helper
   const renderRoomBadge = (status: HotelRoom['status']) => {
+    const label = t(`hotel.room_status_${status}`) || status;
     switch (status) {
       case 'available':
-        return <Badge variant="green">🟢 Disponible</Badge>;
+        return <Badge variant="green">🟢 {label}</Badge>;
       case 'occupied':
-        return <Badge variant="purple">🔵 Occupée</Badge>;
+        return <Badge variant="purple">🔵 {label}</Badge>;
       case 'reserved':
-        return <Badge variant="purple">🟣 Réservée</Badge>;
+        return <Badge variant="purple">🟣 {label}</Badge>;
       case 'cleaning':
-        return <Badge variant="yellow">🟡 Ménage</Badge>;
+        return <Badge variant="yellow">🟡 {label}</Badge>;
       case 'maintenance':
-        return <Badge variant="red">🔴 Maintenance</Badge>;
+        return <Badge variant="red">🔴 {label}</Badge>;
       default:
-        return <Badge variant="gray">{status}</Badge>;
+        return <Badge variant="gray">{label}</Badge>;
     }
   };
 
   // Reservation status badge helper
   const renderResBadge = (status: HotelReservation['status']) => {
+    const label = t(`hotel.res_status_${status}`) || status;
     switch (status) {
       case 'confirmed':
-        return <Badge variant="purple">Confirmée</Badge>;
+        return <Badge variant="purple">{label}</Badge>;
       case 'checked_in':
-        return <Badge variant="purple">En séjour (Checked-in)</Badge>;
+        return <Badge variant="purple">{label}</Badge>;
       case 'checked_out':
-        return <Badge variant="green">Terminée (Checked-out)</Badge>;
+        return <Badge variant="green">{label}</Badge>;
       case 'cancelled':
-        return <Badge variant="red">Annulée</Badge>;
+        return <Badge variant="red">{label}</Badge>;
       default:
-        return <Badge variant="gray">{status}</Badge>;
+        return <Badge variant="gray">{label}</Badge>;
     }
   };
 
@@ -359,14 +361,14 @@ export default function HotelModulePage() {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-black text-[#1F2937]">Gestion Hôtelière</h1>
+                  <h1 className="text-2xl font-black text-[#1F2937]">{t('hotel.title')}</h1>
                   <Badge variant="purple" size="sm">
                     v1.2.0
                   </Badge>
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#6D28D9]" />
                 </div>
                 <p className="text-sm text-[#6B7280] mt-0.5">
-                  Gestion intégrée des chambres, résidents, réservations et revenus hôteliers KaziBox.
+                  {t('hotel.subtitle')}
                 </p>
               </div>
             </div>
@@ -393,7 +395,7 @@ export default function HotelModulePage() {
                 onClick={() => setIsAddResOpen(true)}
                 className="bg-[#6D28D9] hover:bg-[#5B21B6]"
               >
-                ➕ Nouvelle Réservation
+                ➕ {t('hotel.new_reservation_btn')}
               </Button>
             </div>
           </div>
@@ -408,7 +410,7 @@ export default function HotelModulePage() {
                   : 'bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]'
               }`}
             >
-              📊 Tableau de bord
+              📊 {t('hotel.tab_dashboard')}
             </button>
             <button
               onClick={() => setActiveTab('rooms')}
@@ -418,7 +420,7 @@ export default function HotelModulePage() {
                   : 'bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]'
               }`}
             >
-              🛏️ Chambres ({rooms.length})
+              🛏️ {t('hotel.tab_rooms')} ({rooms.length})
             </button>
             <button
               onClick={() => setActiveTab('reservations')}
@@ -428,7 +430,7 @@ export default function HotelModulePage() {
                   : 'bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]'
               }`}
             >
-              📅 Réservations ({reservations.length})
+              📅 {t('hotel.tab_reservations')} ({reservations.length})
             </button>
             <button
               onClick={() => setActiveTab('guests')}
@@ -438,7 +440,7 @@ export default function HotelModulePage() {
                   : 'bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]'
               }`}
             >
-              👥 Clients ({guests.length})
+              👥 {t('hotel.tab_guests')} ({guests.length})
             </button>
             <button
               onClick={() => setActiveTab('reports')}
@@ -448,7 +450,7 @@ export default function HotelModulePage() {
                   : 'bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]'
               }`}
             >
-              📈 Rapports & Comptabilité
+              📈 {t('hotel.tab_reports')}
             </button>
           </div>
         </div>
@@ -459,35 +461,35 @@ export default function HotelModulePage() {
             {/* KPI Cards Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
               <div className="p-4 bg-white rounded-2xl border border-[#E5E7EB] text-center shadow-sm">
-                <span className="text-xs text-[#6B7280] font-medium block">Total Chambres</span>
+                <span className="text-xs text-[#6B7280] font-medium block">{t('hotel.stat_total_rooms')}</span>
                 <span className="text-2xl font-black text-[#1F2937] mt-1 block">{metrics.totalRooms}</span>
               </div>
               <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-center shadow-sm">
-                <span className="text-xs text-emerald-700 font-medium block">Disponibles</span>
+                <span className="text-xs text-emerald-700 font-medium block">{t('hotel.stat_available')}</span>
                 <span className="text-2xl font-black text-emerald-800 mt-1 block">{metrics.availableRooms}</span>
               </div>
               <div className="p-4 bg-blue-50 rounded-2xl border border-blue-200 text-center shadow-sm">
-                <span className="text-xs text-blue-700 font-medium block">Occupées</span>
+                <span className="text-xs text-blue-700 font-medium block">{t('hotel.stat_occupied')}</span>
                 <span className="text-2xl font-black text-blue-800 mt-1 block">{metrics.occupiedRooms}</span>
               </div>
               <div className="p-4 bg-purple-50 rounded-2xl border border-purple-200 text-center shadow-sm">
-                <span className="text-xs text-purple-700 font-medium block">Réservées</span>
+                <span className="text-xs text-purple-700 font-medium block">{t('hotel.room_status_reserved')}</span>
                 <span className="text-2xl font-black text-purple-800 mt-1 block">{metrics.reservedRooms}</span>
               </div>
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-center shadow-sm">
-                <span className="text-xs text-amber-700 font-medium block">Ménage</span>
+                <span className="text-xs text-amber-700 font-medium block">{t('hotel.room_status_cleaning')}</span>
                 <span className="text-2xl font-black text-amber-800 mt-1 block">{metrics.cleaningRooms}</span>
               </div>
               <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200 text-center shadow-sm">
-                <span className="text-xs text-rose-700 font-medium block">Maintenance</span>
+                <span className="text-xs text-rose-700 font-medium block">{t('hotel.room_status_maintenance')}</span>
                 <span className="text-2xl font-black text-rose-800 mt-1 block">{metrics.maintenanceRooms}</span>
               </div>
               <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-200 text-center shadow-sm">
-                <span className="text-xs text-indigo-700 font-medium block">Check-ins Jour</span>
+                <span className="text-xs text-indigo-700 font-medium block">{t('hotel.stat_arrivals')}</span>
                 <span className="text-2xl font-black text-indigo-800 mt-1 block">{metrics.todayCheckIns}</span>
               </div>
               <div className="p-4 bg-teal-50 rounded-2xl border border-teal-200 text-center shadow-sm">
-                <span className="text-xs text-teal-700 font-medium block">Check-outs Jour</span>
+                <span className="text-xs text-teal-700 font-medium block">{t('hotel.stat_departures')}</span>
                 <span className="text-2xl font-black text-teal-800 mt-1 block">{metrics.todayCheckOuts}</span>
               </div>
             </div>
@@ -499,7 +501,7 @@ export default function HotelModulePage() {
                   📊
                 </div>
                 <div>
-                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">Taux d'occupation</span>
+                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">{t('hotel.stat_occupancy')}</span>
                   <div className="text-2xl font-black text-[#1F2937]">{metrics.occupancyRate}%</div>
                   <div className="w-full bg-[#E5E7EB] rounded-full h-2 mt-2 w-48">
                     <div
@@ -515,7 +517,7 @@ export default function HotelModulePage() {
                   💰
                 </div>
                 <div>
-                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">Recettes Hôtelières</span>
+                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">{t('hotel.stat_revenue')}</span>
                   <div className="text-2xl font-black text-[#1F2937]">
                     {metrics.totalRevenue.toLocaleString()} XOF
                   </div>
@@ -530,7 +532,7 @@ export default function HotelModulePage() {
                   ⏳
                 </div>
                 <div>
-                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">Soldes à encaisser</span>
+                  <span className="text-xs text-[#6B7280] uppercase font-bold tracking-wider">{t('hotel.stat_pending')}</span>
                   <div className="text-2xl font-black text-[#1F2937]">
                     {metrics.pendingBalance.toLocaleString()} XOF
                   </div>
@@ -542,13 +544,13 @@ export default function HotelModulePage() {
             {/* Quick Actions Panel & Active Reservations */}
             <div className="bg-white rounded-2xl p-6 border border-[#E5E7EB] shadow-sm space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-[#1F2937]">Séjours et Arrivées Récentes</h3>
+                <h3 className="text-lg font-bold text-[#1F2937]">{t('hotel.recent_stays')}</h3>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={() => setIsAddRoomOpen(true)}>
-                    ➕ Ajouter Chambre
+                    ➕ {t('hotel.add_room_btn')}
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setIsAddGuestOpen(true)}>
-                    👤 Enregistrer Client
+                    👤 {t('hotel.add_guest_btn')}
                   </Button>
                 </div>
               </div>
@@ -557,13 +559,13 @@ export default function HotelModulePage() {
                 <table className="w-full text-left text-xs text-[#374151]">
                   <thead className="bg-[#F9FAFB] text-[#6B7280] uppercase font-bold border-b border-[#E5E7EB]">
                     <tr>
-                      <th className="py-3 px-4">Client</th>
-                      <th className="py-3 px-4">Chambre</th>
-                      <th className="py-3 px-4">Dates</th>
-                      <th className="py-3 px-4">Montant Total</th>
-                      <th className="py-3 px-4">Payé</th>
-                      <th className="py-3 px-4">Statut</th>
-                      <th className="py-3 px-4 text-right">Action</th>
+                      <th className="py-3 px-4">{t('hotel.col_guest')}</th>
+                      <th className="py-3 px-4">{t('hotel.col_room')}</th>
+                      <th className="py-3 px-4">{t('hotel.col_dates')}</th>
+                      <th className="py-3 px-4">{t('hotel.col_total')}</th>
+                      <th className="py-3 px-4">{t('hotel.col_paid')}</th>
+                      <th className="py-3 px-4">{t('hotel.col_status')}</th>
+                      <th className="py-3 px-4 text-right">{t('hotel.col_actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E5E7EB]">
@@ -591,7 +593,7 @@ export default function HotelModulePage() {
                               onClick={() => setSelectedResForCheckIn(res)}
                               className="bg-indigo-600 hover:bg-indigo-700"
                             >
-                              🔑 Check-in
+                              🔑 {t('hotel.check_in_btn')}
                             </Button>
                           )}
                           {res.status === 'checked_in' && (
@@ -601,7 +603,7 @@ export default function HotelModulePage() {
                               onClick={() => setSelectedResForCheckOut(res)}
                               className="border-emerald-600 text-emerald-700 hover:bg-emerald-50"
                             >
-                              🚪 Check-out
+                              🚪 {t('hotel.check_out_btn')}
                             </Button>
                           )}
                         </td>
@@ -619,7 +621,7 @@ export default function HotelModulePage() {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-[#E5E7EB]">
               <div className="flex items-center gap-2 overflow-x-auto">
-                <span className="text-xs font-bold text-[#6B7280] uppercase mr-2">Filtrer par statut:</span>
+                <span className="text-xs font-bold text-[#6B7280] uppercase mr-2">{t('hotel.filter_by_status')}</span>
                 {['all', 'available', 'occupied', 'reserved', 'cleaning', 'maintenance'].map((st) => (
                   <button
                     key={st}
@@ -631,22 +633,14 @@ export default function HotelModulePage() {
                     }`}
                   >
                     {st === 'all'
-                      ? 'Tous'
-                      : st === 'available'
-                      ? 'Disponibles'
-                      : st === 'occupied'
-                      ? 'Occupées'
-                      : st === 'reserved'
-                      ? 'Réservées'
-                      : st === 'cleaning'
-                      ? 'Ménage'
-                      : 'Maintenance'}
+                      ? t('hotel.filter_all')
+                      : t(`hotel.room_status_${st}`)}
                   </button>
                 ))}
               </div>
 
               <Button variant="primary" size="sm" onClick={() => setIsAddRoomOpen(true)} className="bg-[#6D28D9]">
-                ➕ Ajouter une Chambre
+                ➕ {t('hotel.add_room_btn')}
               </Button>
             </div>
 
@@ -667,11 +661,11 @@ export default function HotelModulePage() {
 
                   <div className="space-y-1 text-xs text-[#4B5563]">
                     <div className="flex justify-between">
-                      <span className="text-[#9CA3AF]">Capacité:</span>
-                      <span className="font-bold">{room.capacity} Personnes</span>
+                      <span className="text-[#9CA3AF]">{t('hotel.col_capacity')}:</span>
+                      <span className="font-bold">{room.capacity}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#9CA3AF]">Tarif / nuit:</span>
+                      <span className="text-[#9CA3AF]">{t('hotel.col_price_night')}:</span>
                       <span className="font-extrabold text-[#6D28D9]">{room.price_per_night.toLocaleString()} XOF</span>
                     </div>
                     {room.notes && <div className="text-[11px] text-[#6B7280] italic mt-1">{room.notes}</div>}
@@ -680,18 +674,18 @@ export default function HotelModulePage() {
                   {/* Quick Status Updater */}
                   <div className="pt-2 border-t border-[#E5E7EB]">
                     <label className="text-[10px] uppercase font-bold text-[#9CA3AF] block mb-1">
-                      Changer le statut :
+                      {t('hotel.change_status')}
                     </label>
                     <select
                       value={room.status}
                       onChange={(e) => handleRoomStatusChange(room.id, e.target.value as any)}
                       className="w-full text-xs font-semibold p-2 rounded-xl bg-[#F9FAFB] border border-[#E5E7EB] text-[#1F2937] focus:outline-none focus:ring-2 focus:ring-[#6D28D9]"
                     >
-                      <option value="available">🟢 Disponible</option>
-                      <option value="occupied">🔵 Occupée</option>
-                      <option value="reserved">🟣 Réservée</option>
-                      <option value="cleaning">🟡 Ménage en cours</option>
-                      <option value="maintenance">🔴 En maintenance</option>
+                      <option value="available">🟢 {t('hotel.room_status_available')}</option>
+                      <option value="occupied">🔵 {t('hotel.room_status_occupied')}</option>
+                      <option value="reserved">🟣 {t('hotel.room_status_reserved')}</option>
+                      <option value="cleaning">🟡 {t('hotel.room_status_cleaning')}</option>
+                      <option value="maintenance">🔴 {t('hotel.room_status_maintenance')}</option>
                     </select>
                   </div>
                 </div>
@@ -705,7 +699,7 @@ export default function HotelModulePage() {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-[#E5E7EB]">
               <div className="flex items-center gap-2 overflow-x-auto">
-                <span className="text-xs font-bold text-[#6B7280] uppercase mr-2">Filtrer par statut:</span>
+                <span className="text-xs font-bold text-[#6B7280] uppercase mr-2">{t('hotel.filter_by_status')}</span>
                 {['all', 'confirmed', 'checked_in', 'checked_out', 'cancelled'].map((st) => (
                   <button
                     key={st}
@@ -717,20 +711,14 @@ export default function HotelModulePage() {
                     }`}
                   >
                     {st === 'all'
-                      ? 'Toutes'
-                      : st === 'confirmed'
-                      ? 'Confirmées'
-                      : st === 'checked_in'
-                      ? 'Checked-in'
-                      : st === 'checked_out'
-                      ? 'Checked-out'
-                      : 'Annulées'}
+                      ? t('hotel.filter_all')
+                      : t(`hotel.res_status_${st}`)}
                   </button>
                 ))}
               </div>
 
               <Button variant="primary" size="sm" onClick={() => setIsAddResOpen(true)} className="bg-[#6D28D9]">
-                ➕ Nouvelle Réservation
+                ➕ {t('hotel.new_reservation_btn')}
               </Button>
             </div>
 
@@ -738,15 +726,15 @@ export default function HotelModulePage() {
               <table className="w-full text-left text-xs text-[#374151]">
                 <thead className="bg-[#F9FAFB] text-[#6B7280] uppercase font-bold border-b border-[#E5E7EB]">
                   <tr>
-                    <th className="py-3 px-4">Réservation ID</th>
-                    <th className="py-3 px-4">Client</th>
-                    <th className="py-3 px-4">Chambre</th>
-                    <th className="py-3 px-4">Dates</th>
-                    <th className="py-3 px-4">Montant Total</th>
-                    <th className="py-3 px-4">Payé</th>
-                    <th className="py-3 px-4">Solde Dû</th>
-                    <th className="py-3 px-4">Statut</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
+                    <th className="py-3 px-4">{t('hotel.col_res_id')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_guest')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_room')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_dates')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_total')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_paid')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_balance')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_status')}</th>
+                    <th className="py-3 px-4 text-right">{t('hotel.col_actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E7EB]">
@@ -772,7 +760,7 @@ export default function HotelModulePage() {
                         <td className="py-3 px-4 font-bold">{res.total_amount.toLocaleString()} XOF</td>
                         <td className="py-3 px-4 font-bold text-emerald-600">{res.paid_amount.toLocaleString()} XOF</td>
                         <td className="py-3 px-4 font-bold text-rose-600">
-                          {balance > 0 ? `${balance.toLocaleString()} XOF` : 'SDE (Réglé)'}
+                          {balance > 0 ? `${balance.toLocaleString()} XOF` : t('hotel.fully_settled')}
                         </td>
                         <td className="py-3 px-4">{renderResBadge(res.status)}</td>
                         <td className="py-3 px-4 text-right space-x-2">
@@ -783,7 +771,7 @@ export default function HotelModulePage() {
                               onClick={() => setSelectedResForCheckIn(res)}
                               className="bg-indigo-600 hover:bg-indigo-700"
                             >
-                              🔑 Check-in
+                              🔑 {t('hotel.check_in_btn')}
                             </Button>
                           )}
                           {res.status === 'checked_in' && (
@@ -793,7 +781,7 @@ export default function HotelModulePage() {
                               onClick={() => setSelectedResForCheckOut(res)}
                               className="border-emerald-600 text-emerald-700 hover:bg-emerald-50"
                             >
-                              🚪 Check-out
+                              🚪 {t('hotel.check_out_btn')}
                             </Button>
                           )}
                         </td>
@@ -813,13 +801,13 @@ export default function HotelModulePage() {
               <div className="w-full sm:w-72">
                 <Input
                   type="text"
-                  placeholder="Rechercher par nom, tél, pièce..."
+                  placeholder={t('common.search')}
                   value={guestSearch}
                   onChange={(e) => setGuestSearch(e.target.value)}
                 />
               </div>
               <Button variant="primary" size="sm" onClick={() => setIsAddGuestOpen(true)} className="bg-[#6D28D9]">
-                👤 Enregistrer un Nouveau Client
+                👤 {t('hotel.add_guest_btn')}
               </Button>
             </div>
 
@@ -827,12 +815,12 @@ export default function HotelModulePage() {
               <table className="w-full text-left text-xs text-[#374151]">
                 <thead className="bg-[#F9FAFB] text-[#6B7280] uppercase font-bold border-b border-[#E5E7EB]">
                   <tr>
-                    <th className="py-3 px-4">Nom Complet</th>
-                    <th className="py-3 px-4">Téléphone</th>
-                    <th className="py-3 px-4">Email</th>
-                    <th className="py-3 px-4">N° Pièce / Passeport</th>
-                    <th className="py-3 px-4">Nationalité</th>
-                    <th className="py-3 px-4">Date Inscription</th>
+                    <th className="py-3 px-4">{t('hotel.label_guest_name')}</th>
+                    <th className="py-3 px-4">{t('hotel.label_phone')}</th>
+                    <th className="py-3 px-4">{t('hotel.label_email')}</th>
+                    <th className="py-3 px-4">{t('hotel.label_id_number')}</th>
+                    <th className="py-3 px-4">{t('hotel.label_nationality')}</th>
+                    <th className="py-3 px-4">{t('hotel.col_created_at')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E7EB]">
@@ -864,36 +852,36 @@ export default function HotelModulePage() {
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-6 border border-[#E5E7EB] shadow-sm space-y-6">
               <div>
-                <h3 className="text-lg font-bold text-[#1F2937]">Rapport de Performance Hôtelière</h3>
+                <h3 className="text-lg font-bold text-[#1F2937]">{t('hotel.report_title')}</h3>
                 <p className="text-xs text-[#6B7280]">
-                  Synthèse d'activité hôtelière et écriture comptable synchronisée dans la comptabilité KaziBox.
+                  {t('hotel.report_subtitle')}
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Card padding="md" className="space-y-3">
-                  <h4 className="text-sm font-bold text-[#1F2937]">📊 Ventilation par statut de chambre</h4>
+                  <h4 className="text-sm font-bold text-[#1F2937]">📊 {t('hotel.room_breakdown')}</h4>
                   <div className="space-y-2 text-xs">
                     <div className="flex justify-between items-center">
-                      <span className="text-[#4B5563]">Disponibles ({metrics.availableRooms})</span>
+                      <span className="text-[#4B5563]">{t('hotel.room_status_available')} ({metrics.availableRooms})</span>
                       <span className="font-bold text-emerald-600">
                         {metrics.totalRooms > 0 ? Math.round((metrics.availableRooms / metrics.totalRooms) * 100) : 0}%
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-[#4B5563]">Occupées ({metrics.occupiedRooms})</span>
+                      <span className="text-[#4B5563]">{t('hotel.room_status_occupied')} ({metrics.occupiedRooms})</span>
                       <span className="font-bold text-blue-600">
                         {metrics.totalRooms > 0 ? Math.round((metrics.occupiedRooms / metrics.totalRooms) * 100) : 0}%
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-[#4B5563]">Réservées ({metrics.reservedRooms})</span>
+                      <span className="text-[#4B5563]">{t('hotel.room_status_reserved')} ({metrics.reservedRooms})</span>
                       <span className="font-bold text-purple-600">
                         {metrics.totalRooms > 0 ? Math.round((metrics.reservedRooms / metrics.totalRooms) * 100) : 0}%
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-[#4B5563]">Ménage / Maintenance ({metrics.cleaningRooms + metrics.maintenanceRooms})</span>
+                      <span className="text-[#4B5563]">{t('hotel.room_status_cleaning')} / {t('hotel.room_status_maintenance')} ({metrics.cleaningRooms + metrics.maintenanceRooms})</span>
                       <span className="font-bold text-amber-600">
                         {metrics.totalRooms > 0 ? Math.round(((metrics.cleaningRooms + metrics.maintenanceRooms) / metrics.totalRooms) * 100) : 0}%
                       </span>
@@ -902,17 +890,16 @@ export default function HotelModulePage() {
                 </Card>
 
                 <Card padding="md" className="space-y-3">
-                  <h4 className="text-sm font-bold text-[#1F2937]">🔗 Intégration comptable KaziBox Shared Finance</h4>
+                  <h4 className="text-sm font-bold text-[#1F2937]">🔗 {t('hotel.shared_finance_integration')}</h4>
                   <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
-                    <div className="font-bold">Statut du grand livre hôtelier:</div>
                     <p>
-                      Tous les acomptes de réservation, paiements au check-in et règlements de solde au check-out créent automatiquement une écriture comptable de type <code className="bg-purple-100 px-1 py-0.5 rounded">revenue</code> sous l'identifiant <code className="bg-purple-100 px-1 py-0.5 rounded">hotel-property</code> dans le grand livre partagé KaziBox.
+                      {t('hotel.shared_finance_desc')}
                     </p>
                   </div>
                   <div className="pt-2">
                     <Link href="/finance">
                       <Button variant="outline" size="sm">
-                        Voir le Grand Livre Partagé &rarr;
+                        {t('hotel.view_shared_finance')} &rarr;
                       </Button>
                     </Link>
                   </div>
@@ -923,10 +910,10 @@ export default function HotelModulePage() {
         )}
 
         {/* MODAL: ADD ROOM */}
-        <Modal isOpen={isAddRoomOpen} onClose={() => setIsAddRoomOpen(false)} title="➕ Ajouter une nouvelle chambre">
+        <Modal isOpen={isAddRoomOpen} onClose={() => setIsAddRoomOpen(false)} title={`➕ ${t('hotel.modal_add_room_title')}`}>
           <form onSubmit={handleCreateRoom} className="space-y-4 text-xs">
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Numéro de chambre / Bungalow *</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_room_number')} *</label>
               <Input
                 type="text"
                 placeholder="Ex: 104, 201-B..."
@@ -937,7 +924,7 @@ export default function HotelModulePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Catégorie</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_category')}</label>
                 <select
                   value={newRoomCategory}
                   onChange={(e) => setNewRoomCategory(e.target.value as any)}
@@ -951,7 +938,7 @@ export default function HotelModulePage() {
                 </select>
               </div>
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Capacité (personnes)</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_capacity')}</label>
                 <Input
                   type="number"
                   value={newRoomCapacity}
@@ -961,7 +948,7 @@ export default function HotelModulePage() {
               </div>
             </div>
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Prix par nuit (XOF) *</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_price_per_night')} (XOF) *</label>
               <Input
                 type="number"
                 value={newRoomPrice}
@@ -970,7 +957,7 @@ export default function HotelModulePage() {
               />
             </div>
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Notes / Description</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_notes')}</label>
               <Input
                 type="text"
                 placeholder="Ex: Vue mer, grand balcon..."
@@ -980,20 +967,20 @@ export default function HotelModulePage() {
             </div>
             <div className="pt-4 flex justify-end gap-2 border-t border-[#E5E7EB]">
               <Button type="button" variant="outline" onClick={() => setIsAddRoomOpen(false)}>
-                Annuler
+                {t('common.cancel')}
               </Button>
               <Button type="submit" variant="primary" className="bg-[#6D28D9]">
-                Enregistrer la chambre
+                {t('hotel.btn_submit_room')}
               </Button>
             </div>
           </form>
         </Modal>
 
         {/* MODAL: ADD GUEST */}
-        <Modal isOpen={isAddGuestOpen} onClose={() => setIsAddGuestOpen(false)} title="👤 Enregistrer un nouveau client">
+        <Modal isOpen={isAddGuestOpen} onClose={() => setIsAddGuestOpen(false)} title={`👤 ${t('hotel.modal_add_guest_title')}`}>
           <form onSubmit={handleCreateGuest} className="space-y-4 text-xs">
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Nom complet du client *</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_guest_name')} *</label>
               <Input
                 type="text"
                 placeholder="Ex: Kouassi Jean-Marc"
@@ -1004,7 +991,7 @@ export default function HotelModulePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Téléphone</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_phone')}</label>
                 <Input
                   type="text"
                   placeholder="+225 07..."
@@ -1013,7 +1000,7 @@ export default function HotelModulePage() {
                 />
               </div>
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Email</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_email')}</label>
                 <Input
                   type="email"
                   placeholder="client@email.com"
@@ -1024,7 +1011,7 @@ export default function HotelModulePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="font-bold text-[#374151] block mb-1">N° Pièce d'identité / Passeport</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_id_number')}</label>
                 <Input
                   type="text"
                   placeholder="CI-998822"
@@ -1033,7 +1020,7 @@ export default function HotelModulePage() {
                 />
               </div>
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Nationalité</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_nationality')}</label>
                 <Input
                   type="text"
                   placeholder="Ivoirienne, Sénégalaise..."
@@ -1044,47 +1031,47 @@ export default function HotelModulePage() {
             </div>
             <div className="pt-4 flex justify-end gap-2 border-t border-[#E5E7EB]">
               <Button type="button" variant="outline" onClick={() => setIsAddGuestOpen(false)}>
-                Annuler
+                {t('common.cancel')}
               </Button>
               <Button type="submit" variant="primary" className="bg-[#6D28D9]">
-                Créer la fiche client
+                {t('hotel.btn_submit_guest')}
               </Button>
             </div>
           </form>
         </Modal>
 
         {/* MODAL: NEW RESERVATION */}
-        <Modal isOpen={isAddResOpen} onClose={() => setIsAddResOpen(false)} title="📅 Créer une nouvelle réservation">
+        <Modal isOpen={isAddResOpen} onClose={() => setIsAddResOpen(false)} title={`📅 ${t('hotel.modal_new_res_title')}`}>
           <form onSubmit={handleCreateReservation} className="space-y-4 text-xs">
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Sélectionner le Client *</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_select_guest')} *</label>
               <select
                 value={newResGuestId}
                 onChange={(e) => setNewResGuestId(e.target.value)}
                 className="w-full p-2.5 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] text-xs font-medium"
                 required
               >
-                <option value="">-- Choisir un client --</option>
+                <option value="">-- {t('hotel.label_select_guest')} --</option>
                 {guests.map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.full_name} ({g.phone || 'Pas de tél'})
+                    {g.full_name} ({g.phone || '-'})
                   </option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Sélectionner la Chambre *</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_select_room')} *</label>
               <select
                 value={newResRoomId}
                 onChange={(e) => setNewResRoomId(e.target.value)}
                 className="w-full p-2.5 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] text-xs font-medium"
                 required
               >
-                <option value="">-- Choisir une chambre --</option>
+                <option value="">-- {t('hotel.label_select_room')} --</option>
                 {rooms.map((r) => (
                   <option key={r.id} value={r.id}>
-                    Chambre #{r.room_number} - {r.category} ({r.price_per_night.toLocaleString()} XOF/nuit) - [{r.status}]
+                    #{r.room_number} - {r.category} ({r.price_per_night.toLocaleString()} XOF) - [{t(`hotel.room_status_${r.status}`)}]
                   </option>
                 ))}
               </select>
@@ -1092,7 +1079,7 @@ export default function HotelModulePage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Date de Check-in *</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_check_in_date')} *</label>
                 <Input
                   type="date"
                   value={newResCheckIn}
@@ -1101,7 +1088,7 @@ export default function HotelModulePage() {
                 />
               </div>
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Date de Check-out *</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_check_out_date')} *</label>
                 <Input
                   type="date"
                   value={newResCheckOut}
@@ -1113,8 +1100,8 @@ export default function HotelModulePage() {
 
             <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 flex justify-between items-center">
               <div>
-                <span className="text-[#6D28D9] font-bold block">Montant Total Estimé:</span>
-                <span className="text-[#6B7280]">Calculé sur la durée du séjour</span>
+                <span className="text-[#6D28D9] font-bold block">{t('hotel.calculated_total')}</span>
+                <span className="text-[#6B7280]">{t('hotel.calculated_total_hint')}</span>
               </div>
               <span className="text-lg font-black text-[#6D28D9]">
                 {calculatedTotalAmount.toLocaleString()} XOF
@@ -1122,7 +1109,7 @@ export default function HotelModulePage() {
             </div>
 
             <div>
-              <label className="font-bold text-[#374151] block mb-1">Acompte Versé au moment de la réservation (XOF)</label>
+              <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_deposit')} (XOF)</label>
               <Input
                 type="number"
                 value={newResDeposit}
@@ -1130,16 +1117,16 @@ export default function HotelModulePage() {
                 min="0"
               />
               <span className="text-[10px] text-[#6B7280] mt-1 block">
-                L'acompte sera automatiquement crédité dans le Grand Livre Comptable KaziBox.
+                {t('hotel.deposit_hint')}
               </span>
             </div>
 
             <div className="pt-4 flex justify-end gap-2 border-t border-[#E5E7EB]">
               <Button type="button" variant="outline" onClick={() => setIsAddResOpen(false)}>
-                Annuler
+                {t('common.cancel')}
               </Button>
               <Button type="submit" variant="primary" className="bg-[#6D28D9]">
-                Valider la réservation
+                {t('hotel.btn_submit_res')}
               </Button>
             </div>
           </form>
@@ -1150,23 +1137,23 @@ export default function HotelModulePage() {
           <Modal
             isOpen={Boolean(selectedResForCheckIn)}
             onClose={() => setSelectedResForCheckIn(null)}
-            title={`🔑 Effectuer le Check-in — Chambre #${selectedResForCheckIn.room?.room_number || ''}`}
+            title={`🔑 ${t('hotel.modal_check_in_title')} — #${selectedResForCheckIn.room?.room_number || ''}`}
           >
             <div className="space-y-4 text-xs">
               <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 space-y-1">
                 <div className="font-bold text-blue-900">
-                  Client: {selectedResForCheckIn.guest?.full_name}
+                  {t('hotel.col_guest')}: {selectedResForCheckIn.guest?.full_name}
                 </div>
                 <div className="text-blue-800">
-                  Dates: {selectedResForCheckIn.check_in_date} &rarr; {selectedResForCheckIn.check_out_date}
+                  {t('hotel.col_dates')}: {selectedResForCheckIn.check_in_date} &rarr; {selectedResForCheckIn.check_out_date}
                 </div>
                 <div className="text-blue-800">
-                  Montant total: {selectedResForCheckIn.total_amount.toLocaleString()} XOF | Déjà versé: {selectedResForCheckIn.paid_amount.toLocaleString()} XOF
+                  {t('hotel.col_total')}: {selectedResForCheckIn.total_amount.toLocaleString()} XOF | {t('hotel.col_paid')}: {selectedResForCheckIn.paid_amount.toLocaleString()} XOF
                 </div>
               </div>
 
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Paiement encaissé au check-in (XOF)</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_additional_payment')} (XOF)</label>
                 <Input
                   type="number"
                   value={checkInPayment}
@@ -1177,10 +1164,10 @@ export default function HotelModulePage() {
 
               <div className="pt-4 flex justify-end gap-2 border-t border-[#E5E7EB]">
                 <Button variant="outline" onClick={() => setSelectedResForCheckIn(null)}>
-                  Annuler
+                  {t('common.cancel')}
                 </Button>
                 <Button variant="primary" onClick={handleConfirmCheckIn} className="bg-indigo-600 hover:bg-indigo-700">
-                  Valider le Check-in & Mettre la chambre Occupée
+                  {t('hotel.btn_confirm_check_in')}
                 </Button>
               </div>
             </div>
@@ -1192,7 +1179,7 @@ export default function HotelModulePage() {
           <Modal
             isOpen={Boolean(selectedResForCheckOut)}
             onClose={() => setSelectedResForCheckOut(null)}
-            title={`🚪 Effectuer le Check-out — Chambre #${selectedResForCheckOut.room?.room_number || ''}`}
+            title={`🚪 ${t('hotel.modal_check_out_title')} — #${selectedResForCheckOut.room?.room_number || ''}`}
           >
             <div className="space-y-4 text-xs">
               {(() => {
@@ -1200,23 +1187,23 @@ export default function HotelModulePage() {
                 return (
                   <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1">
                     <div className="font-bold text-emerald-900">
-                      Client: {selectedResForCheckOut.guest?.full_name}
+                      {t('hotel.col_guest')}: {selectedResForCheckOut.guest?.full_name}
                     </div>
                     <div className="text-emerald-800">
-                      Montant Total: {selectedResForCheckOut.total_amount.toLocaleString()} XOF
+                      {t('hotel.col_total')}: {selectedResForCheckOut.total_amount.toLocaleString()} XOF
                     </div>
                     <div className="text-emerald-800">
-                      Total Déjà Réglé: {selectedResForCheckOut.paid_amount.toLocaleString()} XOF
+                      {t('hotel.col_paid')}: {selectedResForCheckOut.paid_amount.toLocaleString()} XOF
                     </div>
                     <div className="font-extrabold text-rose-700 text-sm mt-1">
-                      Solde Restant à Régler: {remaining > 0 ? `${remaining.toLocaleString()} XOF` : '0 XOF (Totalement réglé)'}
+                      {t('hotel.remaining_balance')} {remaining > 0 ? `${remaining.toLocaleString()} XOF` : `0 XOF (${t('hotel.fully_settled')})`}
                     </div>
                   </div>
                 );
               })()}
 
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Règlement final perçu au check-out (XOF)</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_final_settlement')} (XOF)</label>
                 <Input
                   type="number"
                   value={checkOutPayment}
@@ -1226,23 +1213,23 @@ export default function HotelModulePage() {
               </div>
 
               <div>
-                <label className="font-bold text-[#374151] block mb-1">Statut de la chambre après le départ</label>
+                <label className="font-bold text-[#374151] block mb-1">{t('hotel.label_next_room_status')}</label>
                 <select
                   value={checkOutNextStatus}
                   onChange={(e) => setCheckOutNextStatus(e.target.value as any)}
                   className="w-full p-2.5 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] text-xs font-medium"
                 >
-                  <option value="cleaning">🟡 Ménage à faire (Cleaning)</option>
-                  <option value="available">🟢 Prête et Disponible immédiatement</option>
+                  <option value="cleaning">{t('hotel.cleaning_status_opt')}</option>
+                  <option value="available">{t('hotel.available_status_opt')}</option>
                 </select>
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-[#E5E7EB]">
                 <Button variant="outline" onClick={() => setSelectedResForCheckOut(null)}>
-                  Annuler
+                  {t('common.cancel')}
                 </Button>
                 <Button variant="primary" onClick={handleConfirmCheckOut} className="bg-emerald-600 hover:bg-emerald-700">
-                  Clôturer le séjour & Encaisser le solde
+                  {t('hotel.btn_confirm_check_out')}
                 </Button>
               </div>
             </div>
