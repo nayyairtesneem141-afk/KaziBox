@@ -258,7 +258,7 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     ],
     scopes: ['read:repairs', 'write:repairs', 'read:inventory'],
     languages: ['fr', 'en'],
-    summaryUrl: '/api/modules/garage-auto/summary',
+    summaryUrl: '/api/v1/garage/summary',
     webhookUrl: 'https://api.kazibox.com/webhooks/garage-auto',
     pwa: {
       scope: '/modules/garage-auto',
@@ -275,7 +275,11 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     developer: 'KaziBox Automotive Labs',
     category: 'automotive',
     pricing_type: 'paid',
-    keywords: ['garage', 'mecanique', 'reparation', 'auto', 'vehicule', 'atelier', 'pieces', 'car', 'mechanic', 'repair', 'vidange', 'panne'],
+    keywords: [
+      'garage', 'auto', 'automotive', 'repair', 'mechanic', 'mechanics',
+      'vehicle', 'car', 'voiture', 'réparation', 'reparation', 'mécanique',
+      'mecanique', 'atelier', 'pieces', 'vidange', 'panne'
+    ],
     pricePerMonth: { amount: 15000, currency: 'XOF' },
     description: {
       en: 'Field-ready workshop software built for mechanics and collision centers. Digitize vehicle reception, track repair orders (OR), bill labor and replacement parts transparently.',

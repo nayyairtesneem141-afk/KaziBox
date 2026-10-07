@@ -5,6 +5,7 @@ import { notifyModuleActivated, notifyModuleDeactivated } from './notifications'
 import { dispatchWebhookEvent } from './webhooks';
 import { createBrowserClient } from './supabase/client';
 import { createServerClient } from './supabase/server';
+import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
 
 /**
@@ -154,14 +155,42 @@ export async function hasModuleAccess(companyId: string, moduleId: string): Prom
     return true;
   }
 
+  // 1. Check if module has been explicitly cancelled or inactivated in company_modules
+  if (isSupabaseConfigured()) {
+    const supabase: any = typeof window !== 'undefined'
+      ? createBrowserClient()
+      : (createAdminClient() || createServerClient());
+
+    if (supabase) {
+      const { data: compMod } = await supabase
+        .from('company_modules')
+        .select('status')
+        .eq('company_id', companyId)
+        .or(`module_id.eq.${moduleId},module_id.eq.${mod?.slug || moduleId}`)
+        .maybeSingle();
+
+      if (compMod && (compMod.status === 'cancelled' || compMod.status === 'inactive')) {
+        return false;
+      }
+    }
+  }
+
+  // 2. Check workspace subscription
   const sub = await getSubscription(companyId);
   if (!sub) return false;
   if (sub.status !== 'active' && sub.status !== 'expiring_soon') return false;
 
-  // All Access plan grants access to all published modules
-  if (sub.planId === 'all_access') return true;
+  // Verify that the module is currently included in the active subscription
+  const isIncluded = sub.includedModuleIds.includes(moduleId) || 
+    (mod?.slug && sub.includedModuleIds.includes(mod.slug)) ||
+    (moduleId === 'garage-auto' && sub.includedModuleIds.includes('garage')) ||
+    (moduleId === 'garage' && sub.includedModuleIds.includes('garage-auto'));
 
-  return sub.includedModuleIds.includes(moduleId);
+  if (!isIncluded) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -174,8 +203,36 @@ export async function activateModule(
   const mod = await getModule(moduleId);
   const isFree = mod?.pricing_type === 'free';
 
-  if (isSupabaseConfigured() && typeof window !== 'undefined') {
-    const supabase: any = createBrowserClient();
+  // In the browser, invoke the server API route using service role
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/modules/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, moduleId }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        // Also sync local storage store if present
+        const store = getStore();
+        const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
+        if (subIdx !== -1) {
+          const sub = store.subscriptions[subIdx];
+          if (!sub.includedModuleIds.includes(moduleId)) {
+            sub.includedModuleIds.push(moduleId);
+            store.subscriptions[subIdx] = { ...sub };
+            setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+          }
+        }
+        return { success: true };
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  if (isSupabaseConfigured()) {
+    const supabase: any = createAdminClient() || createServerClient();
     if (supabase) {
       // Upsert into company_modules
       await supabase.from('company_modules').upsert({
@@ -190,6 +247,7 @@ export async function activateModule(
         .from('subscriptions')
         .select('*')
         .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
         .maybeSingle();
 
       if (subData) {
@@ -252,7 +310,6 @@ export async function activateModule(
   const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
   await notifyModuleActivated(companyId, modName);
 
-  // Dispatch webhook event to module
   await dispatchWebhookEvent('module.activated', {
     workspaceId: companyId,
     moduleId,
@@ -270,27 +327,58 @@ export async function deactivateModule(
   companyId: string,
   moduleId: string
 ): Promise<{ success: boolean; message?: string }> {
-  if (isSupabaseConfigured() && typeof window !== 'undefined') {
-    const supabase: any = createBrowserClient();
+  // In the browser, invoke the server API route using service role
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/modules/deactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, moduleId }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        // Also sync local storage store if present
+        const store = getStore();
+        const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
+        if (subIdx !== -1) {
+          const sub = store.subscriptions[subIdx];
+          sub.includedModuleIds = sub.includedModuleIds.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
+          store.subscriptions[subIdx] = { ...sub };
+          setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+        }
+        return {
+          success: true,
+          message: 'Vos données sont conservées pendant 30 jours.',
+        };
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  if (isSupabaseConfigured()) {
+    const supabase: any = createAdminClient() || createServerClient();
     if (supabase) {
       await supabase
         .from('company_modules')
         .update({ status: 'cancelled' })
         .eq('company_id', companyId)
-        .eq('module_id', moduleId);
+        .or(`module_id.eq.${moduleId},module_id.eq.${moduleId.replace('-auto', '')}`);
 
       const { data: subData } = await supabase
         .from('subscriptions')
         .select('*')
         .eq('company_id', companyId)
-        .maybeSingle();
+        .order('created_at', { ascending: false });
 
-      if (subData) {
-        const currentList = Array.isArray(subData.included_module_ids) ? (subData.included_module_ids as string[]) : [];
-        const updatedList = currentList.filter((id) => id !== moduleId);
-        await supabase.from('subscriptions').update({
-          included_module_ids: updatedList,
-        }).eq('id', subData.id);
+      if (subData && subData.length > 0) {
+        for (const sub of subData) {
+          const currentList = Array.isArray(sub.included_module_ids) ? (sub.included_module_ids as string[]) : [];
+          const updatedList = currentList.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
+          await supabase.from('subscriptions').update({
+            included_module_ids: updatedList,
+          }).eq('id', sub.id);
+        }
       }
 
       const mod = await getModule(moduleId);
@@ -317,7 +405,7 @@ export async function deactivateModule(
 
   if (subIdx !== -1) {
     const sub = store.subscriptions[subIdx];
-    sub.includedModuleIds = sub.includedModuleIds.filter((id) => id !== moduleId);
+    sub.includedModuleIds = sub.includedModuleIds.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
     store.subscriptions[subIdx] = { ...sub };
     setStoreItem('SUBSCRIPTIONS', store.subscriptions);
   }
@@ -326,7 +414,6 @@ export async function deactivateModule(
   const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
   await notifyModuleDeactivated(companyId, modName);
 
-  // Dispatch webhook event to module
   await dispatchWebhookEvent('module.deactivated', {
     workspaceId: companyId,
     moduleId,
@@ -387,14 +474,29 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
           { id: 'm2', moduleId: modId, label: { fr: 'Arrivées prévues', en: 'Expected Check-ins' }, value: 4 },
         ];
       }
-    } else if (modId === 'garage') {
-      rev = 280000;
-      exp = 65000;
-      activity = 8;
-      metrics = [
-        { id: 'm3', moduleId: modId, label: { fr: "Véhicules à l'atelier", en: 'Vehicles in shop' }, value: 6 },
-        { id: 'm4', moduleId: modId, label: { fr: 'Devis en attente', en: 'Pending quotes' }, value: 2 },
-      ];
+    } else if (modId === 'garage' || modId === 'garage-auto') {
+      try {
+        const { getGarageModuleSummary, getGarageMetrics } = require('./garage');
+        const gSummary = await getGarageModuleSummary(companyId);
+        const gMetrics = await getGarageMetrics(companyId);
+        rev = gMetrics.revenueThisMonth;
+        exp = 0;
+        activity = gMetrics.activeJobs;
+        metrics = (gSummary.metrics || []).map((m: any, idx: number) => ({
+          id: `gm-${idx}`,
+          moduleId: modId,
+          label: { fr: m.label, en: m.label },
+          value: m.value,
+        }));
+      } catch {
+        rev = 280000;
+        exp = 65000;
+        activity = 8;
+        metrics = [
+          { id: 'm3', moduleId: modId, label: { fr: "Véhicules à l'atelier", en: 'Vehicles in shop' }, value: 6 },
+          { id: 'm4', moduleId: modId, label: { fr: 'Devis en attente', en: 'Pending quotes' }, value: 2 },
+        ];
+      }
     } else if (modId === 'demo') {
       rev = 25000;
       exp = 7500;

@@ -35,11 +35,15 @@ export default function MyModulesPage() {
     setSubscription(sub);
 
     if (sub) {
-      if (sub.planId === 'all_access') {
-        setModules(allMods.filter((m) => m.status === 'published'));
-      } else {
-        setModules(allMods.filter((m) => sub.includedModuleIds?.includes(m.id)));
-      }
+      const activeList = allMods.filter((m) => {
+        if (m.pricing_type === 'free') return true;
+        const inc = sub.includedModuleIds || [];
+        return inc.includes(m.id) || 
+          inc.includes(m.slug) || 
+          (m.id === 'garage-auto' && inc.includes('garage')) ||
+          (m.id === 'garage' && inc.includes('garage-auto'));
+      });
+      setModules(activeList);
     } else {
       setModules([]);
     }

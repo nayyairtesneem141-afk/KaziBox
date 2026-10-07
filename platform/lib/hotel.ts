@@ -1,5 +1,6 @@
 import { createBrowserClient } from './supabase/client';
 import { createServerClient } from './supabase/server';
+import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
 import { recordRevenue } from './finance';
 import { ModuleSummary } from '@kazibox/sdk';
@@ -92,7 +93,9 @@ export function ensureUuidCompanyId(id: string): string {
  */
 function getSupabase() {
   if (!isSupabaseConfigured()) return null;
-  const client: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+  const client: any = typeof window !== 'undefined'
+    ? createBrowserClient()
+    : (createAdminClient() || createServerClient());
   return client;
 }
 
@@ -101,6 +104,31 @@ function getSupabase() {
  */
 export async function getRooms(companyIdInput: string): Promise<HotelRoom[]> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`/api/v1/hotel/rooms?companyId=${encodeURIComponent(companyId)}`);
+      const json = await res.json();
+      if (res.ok && json.success && json.rooms && json.rooms.length > 0) {
+        return json.rooms.map((r: any) => ({
+          id: r.id,
+          company_id: r.company_id,
+          room_number: r.room_number,
+          category: r.category,
+          capacity: Number(r.capacity),
+          price_per_night: Number(r.price_per_night),
+          currency: r.currency || 'XOF',
+          status: r.status,
+          notes: r.notes,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        }));
+      }
+    } catch {
+      // Fall through to direct or fallback
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -145,6 +173,25 @@ export async function createRoom(
   room: Omit<HotelRoom, 'id' | 'company_id' | 'created_at' | 'updated_at'>
 ): Promise<{ success: boolean; room?: HotelRoom; error?: string }> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  // In the browser, invoke the secure server API route to bypass anon RLS constraints
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, ...room }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        return { success: true, room: json.room };
+      }
+      return { success: false, error: json.error || 'Erreur lors de la création de la chambre' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -201,6 +248,22 @@ export async function updateRoomStatus(
   status: HotelRoom['status']
 ): Promise<{ success: boolean; error?: string }> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/rooms', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, roomId, status }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true };
+      return { success: false, error: json.error || 'Erreur mise à jour chambre' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { error } = await supabase
@@ -223,6 +286,29 @@ export async function updateRoomStatus(
  */
 export async function getGuests(companyIdInput: string): Promise<HotelGuest[]> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`/api/v1/hotel/guests?companyId=${encodeURIComponent(companyId)}`);
+      const json = await res.json();
+      if (res.ok && json.success && json.guests && json.guests.length > 0) {
+        return json.guests.map((g: any) => ({
+          id: g.id,
+          company_id: g.company_id,
+          full_name: g.full_name,
+          phone: g.phone,
+          email: g.email,
+          id_number: g.id_number,
+          nationality: g.nationality,
+          notes: g.notes,
+          created_at: g.created_at,
+        }));
+      }
+    } catch {
+      // Fall through to direct or fallback
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -260,9 +346,26 @@ export async function getGuests(companyIdInput: string): Promise<HotelGuest[]> {
  * Create a new Guest
  */
 export async function createGuest(
-  companyId: string,
+  companyIdInput: string,
   guest: Omit<HotelGuest, 'id' | 'company_id' | 'created_at'>
 ): Promise<{ success: boolean; guest?: HotelGuest; error?: string }> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/guests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, ...guest }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true, guest: json.guest };
+      return { success: false, error: json.error || 'Erreur création client' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -309,7 +412,51 @@ export async function createGuest(
 /**
  * Fetch all Reservations for Company
  */
-export async function getReservations(companyId: string): Promise<HotelReservation[]> {
+export async function getReservations(companyIdInput: string): Promise<HotelReservation[]> {
+  const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`/api/v1/hotel/reservations?companyId=${encodeURIComponent(companyId)}`);
+      const json = await res.json();
+      if (res.ok && json.success && json.reservations && json.reservations.length > 0) {
+        return json.reservations.map((r: any) => ({
+          id: r.id,
+          company_id: r.company_id,
+          room_id: r.room_id,
+          guest_id: r.guest_id,
+          check_in_date: r.check_in_date,
+          check_out_date: r.check_out_date,
+          status: r.status,
+          total_amount: Number(r.total_amount),
+          paid_amount: Number(r.paid_amount),
+          currency: r.currency || 'XOF',
+          notes: r.notes,
+          created_at: r.created_at,
+          room: r.room ? {
+            id: r.room.id,
+            company_id: r.room.company_id,
+            room_number: r.room.room_number,
+            category: r.room.category,
+            capacity: Number(r.room.capacity),
+            price_per_night: Number(r.room.price_per_night),
+            currency: r.room.currency || 'XOF',
+            status: r.room.status,
+          } : undefined,
+          guest: r.guest ? {
+            id: r.guest.id,
+            company_id: r.guest.company_id,
+            full_name: r.guest.full_name,
+            phone: r.guest.phone,
+            email: r.guest.email,
+          } : undefined,
+        }));
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const [resResult, roomsList, guestsList] = await Promise.all([
@@ -457,6 +604,21 @@ export async function createReservation(
     return { success: false, error: availability.conflictReason };
   }
 
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, ...reservation }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true, reservation: json.reservation };
+      return { success: false, error: json.error || 'Erreur création réservation' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data, error } = await supabase
@@ -552,6 +714,27 @@ export async function checkInGuest(
   currency: string = 'XOF'
 ): Promise<{ success: boolean; error?: string }> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/reservations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId,
+          reservationId,
+          action: 'checkin',
+          paymentAmount: paidAmountAdd,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true };
+      return { success: false, error: json.error || 'Erreur check-in' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     // 1. Fetch reservation to verify state and get current paid_amount
@@ -627,6 +810,28 @@ export async function checkOutGuest(
   currency: string = 'XOF'
 ): Promise<{ success: boolean; error?: string }> {
   const companyId = ensureUuidCompanyId(companyIdInput);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/hotel/reservations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId,
+          reservationId,
+          action: 'checkout',
+          paymentAmount: finalPaymentAdd,
+          nextStatus: nextRoomStatus,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true };
+      return { success: false, error: json.error || 'Erreur check-out' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau' };
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     // 1. Fetch reservation to guard against duplicate checkout
@@ -664,7 +869,7 @@ export async function checkOutGuest(
         moduleId: 'hotel-property',
         amount: finalPaymentAdd,
         currency,
-        source: `Règlement Solde Check-out Réservation #${reservationId.substring(0, 8)}`,
+        source: `Règlement Check-out Réservation #${reservationId.substring(0, 8)}`,
         reference: `REF-HTL-OUT-${reservationId}`,
       });
     }
@@ -679,7 +884,7 @@ export async function checkOutGuest(
       moduleId: 'hotel-property',
       amount: finalPaymentAdd,
       currency,
-      source: `Règlement Solde Check-out Réservation #${reservationId.substring(0, 8)}`,
+      source: `Règlement Check-out Réservation #${reservationId.substring(0, 8)}`,
       reference: `REF-HTL-OUT-${reservationId}`,
     });
   }
