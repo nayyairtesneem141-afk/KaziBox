@@ -67,19 +67,35 @@ export default function ModulePresentationPage() {
   const moduleDescription = localize(moduleData.description, language) || moduleTagline;
   const features = localizeArray(moduleData.features, language);
 
+  const isFree = moduleData.pricing_type === 'free';
   const isSubscribed =
-    subscription &&
-    (subscription.status === 'active' || subscription.status === 'expiring_soon') &&
-    (subscription.planId === 'all_access' || subscription.includedModuleIds.includes(moduleData.id));
+    isFree ||
+    Boolean(
+      subscription &&
+      (subscription.status === 'active' || subscription.status === 'expiring_soon') &&
+      (subscription.planId === 'all_access' || subscription.includedModuleIds.includes(moduleData.id))
+    );
 
   const isComingSoon = moduleData.status === 'coming_soon';
 
-  const priceStr = moduleData.pricePerMonth
+  const priceStr = isFree
+    ? t('catalogue.badge_free')
+    : moduleData.pricePerMonth
     ? `${moduleData.pricePerMonth.amount.toLocaleString()} ${moduleData.pricePerMonth.currency} ${t('billing.per_month')}`
     : t('billing.custom_price');
 
   const handleActivate = async () => {
-    if (!workspace || !isOwner) return;
+    if (!workspace) return;
+
+    if (isFree) {
+      setActivating(true);
+      await activateModule(workspace.company_id, moduleData.id);
+      setActivating(false);
+      router.push(moduleData.entryUrl || `/modules/${moduleData.slug}`);
+      return;
+    }
+
+    if (!isOwner) return;
 
     if (isSubscribed) {
       router.push(moduleData.entryUrl || `/modules/${moduleData.slug}`);
@@ -122,7 +138,11 @@ export default function ModulePresentationPage() {
         </Link>
 
         <div className="flex items-center gap-2">
-          {isSubscribed ? (
+          {isFree ? (
+            <Badge variant="green" size="md">
+              ✓ {t('catalogue.badge_free')}
+            </Badge>
+          ) : isSubscribed ? (
             <Badge variant="green" size="md">
               ✓ {t('catalogue.status_active')}
             </Badge>
@@ -165,6 +185,11 @@ export default function ModulePresentationPage() {
                 <Badge variant="purple" size="sm">
                   v{moduleData.version}
                 </Badge>
+                {isFree && (
+                  <Badge variant="green" size="sm">
+                    {t('catalogue.badge_free')}
+                  </Badge>
+                )}
                 {moduleData.kind === 'external' && (
                   <Badge variant="yellow" size="sm">
                     {t('catalogue.external_developer')}
@@ -189,17 +214,28 @@ export default function ModulePresentationPage() {
           <div className="bg-[#F9FAFB] rounded-2xl p-5 border border-[#E5E7EB] min-w-[260px] flex flex-col justify-between shrink-0">
             <div className="mb-4">
               <span className="text-xs font-semibold text-[#6B7280] block">
-                {t('catalogue.subscription_price')} :
+                {isFree ? t('catalogue.badge_free') : t('catalogue.subscription_price') + ' :'}
               </span>
-              <div className="text-2xl font-black text-[#1F2937] mt-0.5">
+              <div className={`text-2xl font-black ${isFree ? 'text-emerald-700' : 'text-[#1F2937]'} mt-0.5`}>
                 {priceStr}
               </div>
-              <span className="text-[11px] text-[#059669] font-bold block mt-0.5">
-                {t('billing.annual_discount_hint')}
-              </span>
+              {!isFree && (
+                <span className="text-[11px] text-[#059669] font-bold block mt-0.5">
+                  {t('billing.annual_discount_hint')}
+                </span>
+              )}
             </div>
 
-            {isOwner ? (
+            {isFree ? (
+              <Button
+                variant="primary"
+                size="lg"
+                className="w-full font-bold"
+                onClick={handleActivate}
+              >
+                🚀 {t('catalogue.open_tool')}
+              </Button>
+            ) : isOwner ? (
               isSubscribed ? (
                 <Link href={moduleData.entryUrl || `/modules/${moduleData.slug}`}>
                   <Button variant="secondary" size="lg" className="w-full font-bold">

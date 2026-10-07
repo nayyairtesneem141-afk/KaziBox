@@ -11,43 +11,101 @@ import { isSupabaseConfigured } from './supabase/config';
  * Fetch all registered modules
  */
 export async function getModules(): Promise<ModuleManifest[]> {
+  const store = getStore();
+  const baseModules = store.modules;
+
   if (isSupabaseConfigured()) {
     const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
     if (supabase) {
       const { data } = await supabase.from('modules').select('*');
       if (data && data.length > 0) {
-        return data.map((m: any) => {
-          const rawManifest = (typeof m.manifest === 'object' && m.manifest !== null) ? m.manifest : {};
-          return {
-            id: m.id,
-            slug: m.slug,
-            name: m.name as any,
-            description: m.description as any,
-            tagline: m.tagline as any,
-            category: m.category,
-            icon: m.icon,
-            kind: m.kind as any,
-            status: m.status === 'active' ? 'published' : (m.status as any),
-            developer: m.developer,
-            version: m.version,
-            minPlatformVersion: m.min_platform_version,
-            features: m.features as any,
-            pricing: m.pricing as any,
-            ...rawManifest,
-          } as ModuleManifest;
+        const dbMap = new Map<string, any>();
+        data.forEach((m: any) => {
+          dbMap.set(m.id, m);
+          if (m.slug) dbMap.set(m.slug, m);
         });
+
+        const merged: ModuleManifest[] = [];
+        const processedIds = new Set<string>();
+
+        // 1. Process base modules (merge DB overrides if present)
+        for (const baseMod of baseModules) {
+          const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null);
+          if (dbRow) {
+            const rawManifest = (typeof dbRow.manifest === 'object' && dbRow.manifest !== null) ? dbRow.manifest : {};
+            merged.push({
+              ...baseMod,
+              ...rawManifest,
+              id: dbRow.id || baseMod.id,
+              slug: dbRow.slug || baseMod.slug,
+              name: dbRow.name || baseMod.name,
+              description: dbRow.description || baseMod.description,
+              tagline: dbRow.tagline || baseMod.tagline,
+              category: dbRow.category || baseMod.category,
+              pricing_type: baseMod.pricing_type || rawManifest.pricing_type || (dbRow.pricing?.type === 'free' ? 'free' : 'paid'),
+              keywords: baseMod.keywords || rawManifest.keywords || [],
+              status: dbRow.status === 'active' ? 'published' : (dbRow.status || baseMod.status),
+            });
+          } else {
+            merged.push(baseMod);
+          }
+          processedIds.add(baseMod.id);
+        }
+
+        // 2. Add any third-party / external modules registered in Supabase
+        data.forEach((m: any) => {
+          if (!processedIds.has(m.id)) {
+            const rawManifest = (typeof m.manifest === 'object' && m.manifest !== null) ? m.manifest : {};
+            merged.push({
+              id: m.id,
+              slug: m.slug || m.id,
+              name: m.name as any,
+              description: m.description as any,
+              tagline: m.tagline as any,
+              category: m.category || rawManifest.category || 'services',
+              pricing_type: rawManifest.pricing_type || (m.pricing?.type === 'free' ? 'free' : 'paid'),
+              keywords: rawManifest.keywords || [],
+              icon: m.icon,
+              kind: m.kind as any || 'external',
+              status: m.status === 'active' ? 'published' : (m.status as any),
+              developer: m.developer || 'Third-Party Developer',
+              version: m.version || '1.0.0',
+              minPlatformVersion: m.min_platform_version,
+              features: m.features as any,
+              pricing: m.pricing as any,
+              entryUrl: rawManifest.entryUrl || `/modules/${m.slug || m.id}`,
+              menuItems: rawManifest.menuItems || [],
+              scopes: rawManifest.scopes || [],
+              languages: rawManifest.languages || ['fr', 'en'],
+              summaryUrl: rawManifest.summaryUrl || '',
+              webhookUrl: rawManifest.webhookUrl || '',
+              pwa: rawManifest.pwa || {
+                scope: `/modules/${m.slug || m.id}`,
+                startUrl: `/modules/${m.slug || m.id}`,
+                themeColor: '#6D28D9',
+                icons: [],
+              },
+              ...rawManifest,
+            } as ModuleManifest);
+            processedIds.add(m.id);
+          }
+        });
+
+        return merged;
       }
     }
   }
 
-  const store = getStore();
-  return store.modules;
+  return baseModules;
 }
 
 /**
  * Fetch single module by slug or id
  */
 export async function getModule(slugOrId: string): Promise<ModuleManifest | null> {
+  const store = getStore();
+  const baseFound = store.modules.find((m) => m.id === slugOrId || m.slug === slugOrId);
+
   if (isSupabaseConfigured()) {
     const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
     if (supabase) {
@@ -60,13 +118,17 @@ export async function getModule(slugOrId: string): Promise<ModuleManifest | null
       if (data) {
         const rawManifest = (typeof data.manifest === 'object' && data.manifest !== null) ? data.manifest : {};
         return {
+          ...(baseFound || {}),
+          ...rawManifest,
           id: data.id,
           slug: data.slug,
           name: data.name as any,
           description: data.description as any,
           tagline: data.tagline as any,
-          category: data.category,
-          icon: data.icon,
+          category: data.category || (baseFound ? baseFound.category : 'services'),
+          pricing_type: baseFound?.pricing_type || rawManifest.pricing_type || (data.pricing?.type === 'free' ? 'free' : 'paid'),
+          keywords: baseFound?.keywords || rawManifest.keywords || [],
+          icon: data.icon || baseFound?.logo,
           kind: data.kind as any,
           status: data.status === 'active' ? 'published' : (data.status as any),
           developer: data.developer,
@@ -74,21 +136,24 @@ export async function getModule(slugOrId: string): Promise<ModuleManifest | null
           minPlatformVersion: data.min_platform_version,
           features: data.features as any,
           pricing: data.pricing as any,
-          ...rawManifest,
         } as ModuleManifest;
       }
     }
   }
 
-  const store = getStore();
-  const found = store.modules.find((m) => m.id === slugOrId || m.slug === slugOrId);
-  return found || null;
+  return baseFound || null;
 }
 
 /**
  * Check if the workspace has active subscription access to a given module
  */
 export async function hasModuleAccess(companyId: string, moduleId: string): Promise<boolean> {
+  const mod = await getModule(moduleId);
+  // Free tools are accessible to all workspaces without a paid subscription
+  if (mod?.pricing_type === 'free') {
+    return true;
+  }
+
   const sub = await getSubscription(companyId);
   if (!sub) return false;
   if (sub.status !== 'active' && sub.status !== 'expiring_soon') return false;
@@ -106,6 +171,9 @@ export async function activateModule(
   companyId: string,
   moduleId: string
 ): Promise<{ success: boolean; message?: string }> {
+  const mod = await getModule(moduleId);
+  const isFree = mod?.pricing_type === 'free';
+
   if (isSupabaseConfigured() && typeof window !== 'undefined') {
     const supabase: any = createBrowserClient();
     if (supabase) {
@@ -113,11 +181,11 @@ export async function activateModule(
       await supabase.from('company_modules').upsert({
         company_id: companyId,
         module_id: moduleId,
-        plan_id: 'starter',
+        plan_id: isFree ? 'free' : 'starter',
         status: 'active',
       }, { onConflict: 'company_id,module_id' });
 
-      // Update subscription includedModuleIds
+      // Update subscription includedModuleIds if subscription exists
       const { data: subData } = await supabase
         .from('subscriptions')
         .select('*')
@@ -134,7 +202,6 @@ export async function activateModule(
         }
       }
 
-      const mod = await getModule(moduleId);
       const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
       await notifyModuleActivated(companyId, modName);
 
@@ -148,11 +215,25 @@ export async function activateModule(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 200));
   const store = getStore();
   const subIdx = store.subscriptions.findIndex(
     (s) => s.companyId === companyId && (s.status === 'active' || s.status === 'expiring_soon')
   );
+
+  if (isFree) {
+    if (subIdx !== -1) {
+      const sub = store.subscriptions[subIdx];
+      if (!sub.includedModuleIds.includes(moduleId)) {
+        sub.includedModuleIds.push(moduleId);
+        store.subscriptions[subIdx] = { ...sub };
+        setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+      }
+    }
+    const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
+    await notifyModuleActivated(companyId, modName);
+    return { success: true };
+  }
 
   if (subIdx === -1) {
     return {
@@ -168,7 +249,6 @@ export async function activateModule(
     setStoreItem('SUBSCRIPTIONS', store.subscriptions);
   }
 
-  const mod = await getModule(moduleId);
   const modName = typeof mod?.name === 'string' ? mod.name : mod?.name?.fr || moduleId;
   await notifyModuleActivated(companyId, modName);
 

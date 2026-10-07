@@ -41,7 +41,9 @@ export interface ModuleManifest {
   developer?: string;
   author?: string;
   isThirdParty?: boolean;
-  category?: 'hospitality' | 'automotive' | 'retail' | 'health' | 'services' | 'logistics' | 'food' | string;
+  category?: 'hospitality' | 'automotive' | 'retail' | 'health' | 'services' | 'logistics' | 'food' | 'utilities' | 'beauty' | string;
+  pricing_type?: 'free' | 'paid';
+  keywords?: string[];
   pricePerMonth?: {
     amount: number;
     currency: string;
