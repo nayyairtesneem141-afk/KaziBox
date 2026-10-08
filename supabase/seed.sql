@@ -70,15 +70,17 @@ INSERT INTO public.company_modules (
 ) VALUES
 ('11111111-1111-4111-8111-111111111111', 'hotel-property', 'pro', 'active', '2026-01-15 08:00:00+00'),
 ('11111111-1111-4111-8111-111111111111', 'demo', 'starter', 'active', '2026-01-15 08:00:00+00'),
-('22222222-2222-4222-8222-222222222222', 'garage', 'starter', 'active', '2026-02-10 10:30:00+00')
+('11111111-1111-4111-8111-111111111111', 'salon-beauty', 'starter', 'active', '2026-01-15 08:00:00+00'),
+('22222222-2222-4222-8222-222222222222', 'garage', 'starter', 'active', '2026-02-10 10:30:00+00'),
+('22222222-2222-4222-8222-222222222222', 'salon-beauty', 'starter', 'active', '2026-02-10 10:30:00+00')
 ON CONFLICT (company_id, module_id) DO NOTHING;
 
 -- 4. SEED SUBSCRIPTIONS
 INSERT INTO public.subscriptions (
   company_id, plan_id, status, current_period_start, included_module_ids
 ) VALUES 
-('11111111-1111-4111-8111-111111111111', 'pro', 'active', NOW(), '["hotel-property", "demo"]'::jsonb),
-('22222222-2222-4222-8222-222222222222', 'starter', 'active', NOW(), '["garage"]'::jsonb);
+('11111111-1111-4111-8111-111111111111', 'pro', 'active', NOW(), '["hotel-property", "demo", "salon-beauty", "hair-salon", "salon", "garage-auto", "garage"]'::jsonb),
+('22222222-2222-4222-8222-222222222222', 'starter', 'active', NOW(), '["garage", "garage-auto", "salon-beauty", "hair-salon", "salon"]'::jsonb);
 
 -- 5. SEED DEMO FINANCE RECORDS
 INSERT INTO public.finance_records (

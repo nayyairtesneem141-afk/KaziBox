@@ -155,22 +155,35 @@ export async function hasModuleAccess(companyId: string, moduleId: string): Prom
     return true;
   }
 
-  // 1. Check if module has been explicitly cancelled or inactivated in company_modules
+  const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
+  const isGarage = ['garage', 'garage-auto'].includes(moduleId);
+
+  // 1. Check if module status is explicitly set in company_modules table
   if (isSupabaseConfigured()) {
     const supabase: any = typeof window !== 'undefined'
       ? createBrowserClient()
       : (createAdminClient() || createServerClient());
 
     if (supabase) {
-      const { data: compMod } = await supabase
+      const filterStr = isSalon
+        ? 'module_id.eq.hair-salon,module_id.eq.salon,module_id.eq.salon-beauty'
+        : isGarage
+        ? 'module_id.eq.garage,module_id.eq.garage-auto'
+        : `module_id.eq.${moduleId},module_id.eq.${mod?.slug || moduleId}`;
+
+      const { data: compMods } = await supabase
         .from('company_modules')
         .select('status')
         .eq('company_id', companyId)
-        .or(`module_id.eq.${moduleId},module_id.eq.${mod?.slug || moduleId}`)
-        .maybeSingle();
+        .or(filterStr);
 
-      if (compMod && (compMod.status === 'cancelled' || compMod.status === 'inactive')) {
-        return false;
+      if (compMods && compMods.length > 0) {
+        if (compMods.some((m: any) => m.status === 'active')) {
+          return true;
+        }
+        if (compMods.some((m: any) => m.status === 'cancelled' || m.status === 'inactive')) {
+          return false;
+        }
       }
     }
   }
@@ -180,20 +193,17 @@ export async function hasModuleAccess(companyId: string, moduleId: string): Prom
   if (!sub) return false;
   if (sub.status !== 'active' && sub.status !== 'expiring_soon') return false;
 
+  if (sub.planId === 'all_access') {
+    return true;
+  }
+
   // Verify that the module is currently included in the active subscription
   const isIncluded = sub.includedModuleIds.includes(moduleId) || 
     (mod?.slug && sub.includedModuleIds.includes(mod.slug)) ||
-    (moduleId === 'garage-auto' && sub.includedModuleIds.includes('garage')) ||
-    (moduleId === 'garage' && sub.includedModuleIds.includes('garage-auto')) ||
-    (moduleId === 'hair-salon' && (sub.includedModuleIds.includes('salon') || sub.includedModuleIds.includes('salon-beauty'))) ||
-    (moduleId === 'salon-beauty' && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon'))) ||
-    (moduleId === 'salon' && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon-beauty')));
+    (isGarage && (sub.includedModuleIds.includes('garage') || sub.includedModuleIds.includes('garage-auto'))) ||
+    (isSalon && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon') || sub.includedModuleIds.includes('salon-beauty')));
 
-  if (!isIncluded) {
-    return false;
-  }
-
-  return true;
+  return isIncluded;
 }
 
 /**
