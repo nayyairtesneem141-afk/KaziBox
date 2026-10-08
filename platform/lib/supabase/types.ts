@@ -645,6 +645,194 @@ export interface Database {
           created_at?: string;
         };
       };
+      salon_customers: {
+        Row: {
+          id: string;
+          company_id: string;
+          name: string;
+          phone: string;
+          email: string | null;
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          name: string;
+          phone: string;
+          email?: string | null;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          name?: string;
+          phone?: string;
+          email?: string | null;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      salon_staff: {
+        Row: {
+          id: string;
+          company_id: string;
+          name: string;
+          phone: string | null;
+          role: 'stylist' | 'beautician' | 'receptionist' | 'manager';
+          status: 'active' | 'inactive';
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          name: string;
+          phone?: string | null;
+          role?: 'stylist' | 'beautician' | 'receptionist' | 'manager';
+          status?: 'active' | 'inactive';
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          name?: string;
+          phone?: string | null;
+          role?: 'stylist' | 'beautician' | 'receptionist' | 'manager';
+          status?: 'active' | 'inactive';
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      salon_services: {
+        Row: {
+          id: string;
+          company_id: string;
+          name: string;
+          description: string | null;
+          duration_minutes: number;
+          price: number;
+          status: 'active' | 'inactive';
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          name: string;
+          description?: string | null;
+          duration_minutes?: number;
+          price?: number;
+          status?: 'active' | 'inactive';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          name?: string;
+          description?: string | null;
+          duration_minutes?: number;
+          price?: number;
+          status?: 'active' | 'inactive';
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      salon_appointments: {
+        Row: {
+          id: string;
+          company_id: string;
+          customer_id: string;
+          staff_id: string;
+          service_id: string;
+          appointment_date: string;
+          start_time: string;
+          end_time: string;
+          status: 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+          price: number;
+          notes: string | null;
+          completed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          customer_id: string;
+          staff_id: string;
+          service_id: string;
+          appointment_date: string;
+          start_time: string;
+          end_time: string;
+          status?: 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+          price?: number;
+          notes?: string | null;
+          completed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          customer_id?: string;
+          staff_id?: string;
+          service_id?: string;
+          appointment_date?: string;
+          start_time?: string;
+          end_time?: string;
+          status?: 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+          price?: number;
+          notes?: string | null;
+          completed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      salon_payments: {
+        Row: {
+          id: string;
+          company_id: string;
+          appointment_id: string;
+          amount: number;
+          payment_method: 'cash' | 'mobile_money' | 'card' | 'bank_transfer' | 'other';
+          reference: string | null;
+          paid_at: string;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          appointment_id: string;
+          amount: number;
+          payment_method?: 'cash' | 'mobile_money' | 'card' | 'bank_transfer' | 'other';
+          reference?: string | null;
+          paid_at?: string;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          appointment_id?: string;
+          amount?: number;
+          payment_method?: 'cash' | 'mobile_money' | 'card' | 'bank_transfer' | 'other';
+          reference?: string | null;
+          paid_at?: string;
+          notes?: string | null;
+          created_at?: string;
+        };
+      };
     };
   };
 }
+

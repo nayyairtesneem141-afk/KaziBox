@@ -14,7 +14,12 @@ const envVars = Object.fromEntries(
 const sbAdmin = createClient(envVars.NEXT_PUBLIC_SUPABASE_URL, envVars.SUPABASE_SERVICE_ROLE_KEY);
 
 async function run() {
-  const tables = ['companies', 'profiles', 'modules', 'subscriptions', 'company_modules', 'hotel_rooms', 'hotel_guests', 'hotel_reservations', 'finance_records', 'garage_customers', 'garage_vehicles', 'garage_jobs', 'garage_job_items', 'garage_payments'];
+  const tables = [
+    'companies', 'profiles', 'modules', 'subscriptions', 'company_modules',
+    'hotel_rooms', 'hotel_guests', 'hotel_reservations', 'finance_records',
+    'garage_customers', 'garage_vehicles', 'garage_jobs', 'garage_job_items', 'garage_payments',
+    'salon_customers', 'salon_staff', 'salon_services', 'salon_appointments', 'salon_payments'
+  ];
   for (const t of tables) {
     const { data, error } = await sbAdmin.from(t).select('count').limit(1);
     console.log(`Table ${t}:`, error ? `Error: ${error.message}` : 'EXISTS');

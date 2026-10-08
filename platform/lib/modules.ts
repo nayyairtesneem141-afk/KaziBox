@@ -184,7 +184,10 @@ export async function hasModuleAccess(companyId: string, moduleId: string): Prom
   const isIncluded = sub.includedModuleIds.includes(moduleId) || 
     (mod?.slug && sub.includedModuleIds.includes(mod.slug)) ||
     (moduleId === 'garage-auto' && sub.includedModuleIds.includes('garage')) ||
-    (moduleId === 'garage' && sub.includedModuleIds.includes('garage-auto'));
+    (moduleId === 'garage' && sub.includedModuleIds.includes('garage-auto')) ||
+    (moduleId === 'hair-salon' && (sub.includedModuleIds.includes('salon') || sub.includedModuleIds.includes('salon-beauty'))) ||
+    (moduleId === 'salon-beauty' && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon'))) ||
+    (moduleId === 'salon' && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon-beauty')));
 
   if (!isIncluded) {
     return false;
@@ -340,9 +343,17 @@ export async function deactivateModule(
         // Also sync local storage store if present
         const store = getStore();
         const subIdx = store.subscriptions.findIndex((s) => s.companyId === companyId);
+        const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
+        const isGarage = ['garage-auto', 'garage'].includes(moduleId);
+        const targetIds = isSalon
+          ? ['hair-salon', 'salon', 'salon-beauty']
+          : isGarage
+          ? ['garage-auto', 'garage']
+          : [moduleId, moduleId.replace('-auto', '')];
+
         if (subIdx !== -1) {
           const sub = store.subscriptions[subIdx];
-          sub.includedModuleIds = sub.includedModuleIds.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
+          sub.includedModuleIds = sub.includedModuleIds.filter((id) => !targetIds.includes(id));
           store.subscriptions[subIdx] = { ...sub };
           setStoreItem('SUBSCRIPTIONS', store.subscriptions);
         }
@@ -359,11 +370,21 @@ export async function deactivateModule(
   if (isSupabaseConfigured()) {
     const supabase: any = createAdminClient() || createServerClient();
     if (supabase) {
-      await supabase
-        .from('company_modules')
-        .update({ status: 'cancelled' })
-        .eq('company_id', companyId)
-        .or(`module_id.eq.${moduleId},module_id.eq.${moduleId.replace('-auto', '')}`);
+      const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
+      const isGarage = ['garage-auto', 'garage'].includes(moduleId);
+      const targetIds = isSalon
+        ? ['hair-salon', 'salon', 'salon-beauty']
+        : isGarage
+        ? ['garage-auto', 'garage']
+        : [moduleId, moduleId.replace('-auto', '')];
+
+      for (const tId of targetIds) {
+        await supabase
+          .from('company_modules')
+          .update({ status: 'cancelled' })
+          .eq('company_id', companyId)
+          .eq('module_id', tId);
+      }
 
       const { data: subData } = await supabase
         .from('subscriptions')
@@ -374,7 +395,7 @@ export async function deactivateModule(
       if (subData && subData.length > 0) {
         for (const sub of subData) {
           const currentList = Array.isArray(sub.included_module_ids) ? (sub.included_module_ids as string[]) : [];
-          const updatedList = currentList.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
+          const updatedList = currentList.filter((id) => !targetIds.includes(id));
           await supabase.from('subscriptions').update({
             included_module_ids: updatedList,
           }).eq('id', sub.id);
@@ -495,6 +516,30 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
         metrics = [
           { id: 'm3', moduleId: modId, label: { fr: "Véhicules à l'atelier", en: 'Vehicles in shop' }, value: 6 },
           { id: 'm4', moduleId: modId, label: { fr: 'Devis en attente', en: 'Pending quotes' }, value: 2 },
+        ];
+      }
+    } else if (modId === 'hair-salon' || modId === 'salon' || modId === 'salon-beauty') {
+      try {
+        const { getSalonModuleSummary, getSalonMetrics } = require('./salon');
+        const sSummary = await getSalonModuleSummary(companyId);
+        const sMetrics = await getSalonMetrics(companyId);
+        rev = sMetrics.revenueThisMonth;
+        exp = 0;
+        activity = sMetrics.todayAppointments;
+        metrics = (sSummary.metrics || []).map((m: any, idx: number) => ({
+          id: m.id || `sal-m-${idx}`,
+          moduleId: 'hair-salon',
+          label: m.label || { fr: 'Métrique', en: 'Metric' },
+          value: m.value,
+          currency: m.currency,
+        }));
+      } catch {
+        rev = 240000;
+        exp = 0;
+        activity = 8;
+        metrics = [
+          { id: 'm1', moduleId: modId, label: { fr: 'Rendez-vous du jour', en: "Today's Appointments" }, value: 6 },
+          { id: 'm2', moduleId: modId, label: { fr: 'Équipe active', en: 'Active Stylists' }, value: 3 },
         ];
       }
     } else if (modId === 'demo') {

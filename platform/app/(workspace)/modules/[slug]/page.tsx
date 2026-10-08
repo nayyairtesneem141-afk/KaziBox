@@ -48,9 +48,13 @@ export default function ModuleShellPage() {
   if (!moduleData) {
     return (
       <div className="max-w-md mx-auto my-12 text-center">
-        <h2 className="text-xl font-bold text-[#1F2937] mb-2">Module introuvable</h2>
+        <h2 className="text-xl font-bold text-[#1F2937] mb-2">
+          {language === 'fr' ? 'Module introuvable' : 'Module not found'}
+        </h2>
         <Link href="/modules/my-modules">
-          <Button variant="outline">Retour à mes modules</Button>
+          <Button variant="outline">
+            {language === 'fr' ? 'Retour à mes modules' : 'Back to my modules'}
+          </Button>
         </Link>
       </div>
     );

@@ -38,11 +38,21 @@ export async function POST(req: NextRequest) {
     const supabase: any = createAdminClient();
     if (supabase) {
       // 1. Update company_modules status to cancelled
-      await supabase
-        .from('company_modules')
-        .update({ status: 'cancelled' })
-        .eq('company_id', companyId)
-        .or(`module_id.eq.${moduleId},module_id.eq.${moduleId.replace('-auto', '')}`);
+      const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
+      const isGarage = ['garage-auto', 'garage'].includes(moduleId);
+      const targetIds = isSalon
+        ? ['hair-salon', 'salon', 'salon-beauty']
+        : isGarage
+        ? ['garage-auto', 'garage']
+        : [moduleId, moduleId.replace('-auto', '')];
+
+      for (const tId of targetIds) {
+        await supabase
+          .from('company_modules')
+          .update({ status: 'cancelled' })
+          .eq('company_id', companyId)
+          .eq('module_id', tId);
+      }
 
       // 2. Remove from subscriptions.included_module_ids
       const { data: subData } = await supabase
@@ -55,7 +65,7 @@ export async function POST(req: NextRequest) {
         for (const sub of subData) {
           const currentList = Array.isArray(sub.included_module_ids) ? (sub.included_module_ids as string[]) : [];
           const updatedList = currentList.filter(
-            (id) => id !== moduleId && id !== moduleId.replace('-auto', '')
+            (id) => !targetIds.includes(id)
           );
           await supabase
             .from('subscriptions')

@@ -392,7 +392,7 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     ],
     scopes: ['read:appointments', 'write:appointments', 'read:clients'],
     languages: ['fr', 'en'],
-    summaryUrl: '/api/modules/hair-salon/summary',
+    summaryUrl: '/api/v1/salon/summary',
     webhookUrl: 'https://api.kazibox.com/webhooks/hair-salon',
     pwa: {
       scope: '/modules/hair-salon',
@@ -409,7 +409,11 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     developer: 'KaziBox Lifestyle',
     category: 'beauty',
     pricing_type: 'paid',
-    keywords: ['coiffure', 'cheveux', 'beaute', 'salon', 'barbier', 'barber', 'hair', 'hairdressing', 'spa', 'esthetique', 'onglerie', 'manucure', 'tresse'],
+    keywords: [
+      'salon', 'hair', 'beauty', 'spa', 'haircut', 'stylist', 'coiffure',
+      'beauté', 'beaute', 'cheveux', 'esthétique', 'esthetique', 'massage',
+      'manucure', 'pédicure', 'pedicure', 'barbier', 'barber', 'onglerie', 'tresse'
+    ],
     pricePerMonth: { amount: 10000, currency: 'XOF' },
     description: {
       en: 'Designed specifically for barbershops, hair styling salons, and beauty studios. Keep calendars clear, commissions calculated, and customer loyalty high.',
