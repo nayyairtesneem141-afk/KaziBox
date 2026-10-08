@@ -677,10 +677,15 @@ export async function createGarageVehicle(
     return { success: false, error: 'Le propriétaire (client) est obligatoire.' };
   }
 
-  // Cross-tenant relationship validation: Verify customer belongs to this company
-  const customer = await getGarageCustomerById(companyId, vehicleData.customer_id);
-  if (!customer) {
-    return { success: false, error: 'Le client sélectionné n’appartient pas à cette entreprise.' };
+  // Cross-tenant relationship validation: Verify customer belongs to this company.
+  // Runs server-side only (admin client); in the browser the anon client is blocked by RLS
+  // and the API route re-runs this check anyway.
+  let customer: GarageCustomer | undefined;
+  if (typeof window === 'undefined') {
+    customer = (await getGarageCustomerById(companyId, vehicleData.customer_id)) ?? undefined;
+    if (!customer) {
+      return { success: false, error: 'Le client sélectionné n’appartient pas à cette entreprise.' };
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -886,17 +891,21 @@ export async function createGarageJob(
     return { success: false, error: 'Le véhicule est obligatoire.' };
   }
 
-  // Multi-tenancy check & vehicle-customer relationship validation
-  const customer = await getGarageCustomerById(companyId, jobData.customer_id);
-  if (!customer) {
-    return { success: false, error: 'Client introuvable dans cette entreprise.' };
-  }
-  const vehicle = await getGarageVehicleById(companyId, jobData.vehicle_id);
-  if (!vehicle) {
-    return { success: false, error: 'Véhicule introuvable dans cette entreprise.' };
-  }
-  if (vehicle.customer_id !== jobData.customer_id) {
-    return { success: false, error: 'Ce véhicule n’appartient pas au client sélectionné.' };
+  // Multi-tenancy check & vehicle-customer relationship validation (server-side only)
+  let customer: GarageCustomer | undefined;
+  let vehicle: GarageVehicle | undefined;
+  if (typeof window === 'undefined') {
+    customer = (await getGarageCustomerById(companyId, jobData.customer_id)) ?? undefined;
+    if (!customer) {
+      return { success: false, error: 'Client introuvable dans cette entreprise.' };
+    }
+    vehicle = (await getGarageVehicleById(companyId, jobData.vehicle_id)) ?? undefined;
+    if (!vehicle) {
+      return { success: false, error: 'Véhicule introuvable dans cette entreprise.' };
+    }
+    if (vehicle.customer_id !== jobData.customer_id) {
+      return { success: false, error: 'Ce véhicule n’appartient pas au client sélectionné.' };
+    }
   }
 
   // Calculate total amount from items if items are provided

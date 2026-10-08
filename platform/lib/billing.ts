@@ -4,6 +4,7 @@ import { notifySubscriptionActivated, notifyPaymentFailed } from './notification
 import { dispatchWebhookEvent } from './webhooks';
 import { createBrowserClient } from './supabase/client';
 import { createServerClient } from './supabase/server';
+import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
 
 export const PLANS: Plan[] = [
@@ -120,7 +121,9 @@ export async function getPlans(): Promise<Plan[]> {
  */
 export async function getSubscription(companyId: string): Promise<Subscription | null> {
   if (isSupabaseConfigured()) {
-    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    const supabase: any = typeof window !== 'undefined'
+      ? createBrowserClient()
+      : (createAdminClient() || createServerClient());
     if (supabase) {
       const { data } = await supabase
         .from('subscriptions')

@@ -956,6 +956,23 @@ export async function createSalonAppointment(
   if (!data.appointment_date) return { success: false, error: 'La date du rendez-vous est obligatoire.' };
   if (!data.start_time) return { success: false, error: 'L’heure de début est obligatoire.' };
 
+  // In the browser, delegate to the API route: ownership + conflict checks run there with the
+  // admin client (the anon browser client is blocked by RLS and would wrongly reject valid data).
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/salon/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, ...data }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true, appointment: json.appointment };
+      return { success: false, error: json.error || 'Erreur lors de la prise de rendez-vous.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau.' };
+    }
+  }
+
   // 1. Multi-tenant entity verification
   const customer = await getSalonCustomerById(companyId, data.customer_id);
   if (!customer) {
@@ -989,26 +1006,6 @@ export async function createSalonAppointment(
       success: false,
       error: `Créneau indisponible : ${staff.name} a déjà un rendez-vous planifié sur cet horaire (${data.start_time} - ${endTime}).`,
     };
-  }
-
-  if (typeof window !== 'undefined') {
-    try {
-      const res = await fetch('/api/v1/salon/appointments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: companyId,
-          end_time: endTime,
-          price: finalPrice,
-          ...data,
-        }),
-      });
-      const json = await res.json();
-      if (res.ok && json.success) return { success: true, appointment: json.appointment };
-      return { success: false, error: json.error || 'Erreur lors de la prise de rendez-vous.' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Erreur réseau.' };
-    }
   }
 
   const supabase = getSupabase();
