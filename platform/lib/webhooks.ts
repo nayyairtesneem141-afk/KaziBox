@@ -169,12 +169,60 @@ function computeSignatureHex(secret: string, data: string): string {
 }
 
 /**
- * Sign payload using HMAC-SHA256 simulation safe for client and server
+ * Sign payload using HMAC-SHA256 (standard Node crypto on server, deterministic fallback in browser)
  */
-export function signWebhookPayload(payload: Record<string, any>, secret: string = MOCK_WEBHOOK_SECRET): string {
-  const payloadString = JSON.stringify(payload);
+export function signWebhookPayload(payload: Record<string, any> | string, secret: string = MOCK_WEBHOOK_SECRET): string {
+  const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  if (typeof window === 'undefined') {
+    try {
+      const crypto = require('crypto');
+      const hash = crypto.createHmac('sha256', secret).update(payloadString).digest('hex');
+      return `sha256=${hash}`;
+    } catch {}
+  }
   const hash = computeSignatureHex(secret, payloadString);
   return `sha256=${hash}`;
+}
+
+/**
+ * Verifies an incoming webhook signature against the raw request body and secret.
+ * Performs constant-time comparison to protect against timing attacks.
+ * Strictly requires both signatureHeader and secret to avoid weakened authentication.
+ */
+export function verifyWebhookSignature(
+  rawBody: string | Buffer | Record<string, any>,
+  signatureHeader: string,
+  secret: string
+): boolean {
+  if (!signatureHeader || !secret) return false;
+  const bodyString = typeof rawBody === 'string'
+    ? rawBody
+    : (typeof Buffer !== 'undefined' && Buffer.isBuffer(rawBody)
+        ? rawBody.toString('utf8')
+        : JSON.stringify(rawBody));
+
+  const rawSig = signatureHeader.startsWith('sha256=') ? signatureHeader.slice(7) : signatureHeader;
+
+  // Primary server-side: standard Node crypto HMAC-SHA256 with timingSafeEqual
+  if (typeof window === 'undefined') {
+    try {
+      const crypto = require('crypto');
+      const expectedHex = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
+      const rawSigBuf = Buffer.from(rawSig, 'hex');
+      const expectedBuf = Buffer.from(expectedHex, 'hex');
+      if (rawSigBuf.length !== expectedBuf.length || rawSigBuf.length === 0) return false;
+      return crypto.timingSafeEqual(rawSigBuf, expectedBuf);
+    } catch {}
+  }
+
+  // Fallback (e.g. browser environments without Node crypto):
+  const expectedSig = computeSignatureHex(secret, bodyString);
+  if (rawSig.length !== expectedSig.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < rawSig.length; i++) {
+    mismatch |= rawSig.charCodeAt(i) ^ expectedSig.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 /**

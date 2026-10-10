@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
+import { createServerClient } from './supabase/server';
 import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
-import { getStore } from './storage';
 
 export interface ServerUserSession {
   userId: string;
@@ -12,80 +12,117 @@ export interface ServerUserSession {
 }
 
 /**
- * Extract authenticated session from incoming NextRequest
+ * Resolves the authenticated session from an incoming API route request.
+ *
+ * ── Trust model ──────────────────────────────────────────────────────────────
+ * Primary path (Supabase configured):
+ *   1. `createServerClient()` wires up @supabase/ssr which reads the Supabase
+ *      JWT cookies set by the browser client (`sb-*-auth-token`).
+ *   2. `supabase.auth.getUser()` verifies the JWT's cryptographic signature
+ *      server-side via Supabase's token introspection endpoint.  A forged or
+ *      tampered token is always rejected here before any DB lookup.
+ *   3. The authenticated user ID is then used to look up their `profiles` row
+ *      with the service-role admin client (bypasses RLS — safe because the
+ *      user has already been verified by Supabase Auth above).
+ *   4. The profile's `company_id` is the authoritative tenant boundary.
+ *      It is never read from any request header or from the plain-JSON
+ *      `kazibox_session` cookie.
+ *
+ * Demo / offline fallback (Supabase NOT configured):
+ *   - Falls back to the plain-JSON `kazibox_session` cookie so the local demo
+ *     mode keeps working without breaking the UI.  This path is explicitly NOT
+ *     safe against forgery and MUST NOT be reached in a production deployment
+ *     that has Supabase configured.
+ *
+ * Headers `x-user-id`, `x-company-id`, and `x-workspace-id` are NEVER read.
  */
 export async function getServerSession(req: NextRequest): Promise<ServerUserSession | null> {
-  let userId: string | null = null;
-  let companyId: string | null = null;
+  // ── Primary: Supabase JWT validation ────────────────────────────────────
+  if (isSupabaseConfigured()) {
+    // createServerClient() uses @supabase/ssr which wires next/headers cookies
+    // so it picks up the Supabase JWT session written during login.
+    const supabaseAnon = createServerClient();
+    if (supabaseAnon) {
+      const { data: { user }, error } = await (supabaseAnon as any).auth.getUser();
 
-  // 1. Try kazibox_session cookie
-  const sessionCookie = req.cookies.get('kazibox_session')?.value;
-  if (sessionCookie) {
-    try {
-      const decoded = JSON.parse(decodeURIComponent(sessionCookie));
-      if (decoded.companyId) {
-        userId = decoded.userId || null;
-        companyId = decoded.companyId;
+      // getUser() returns null user (not an error) for anonymous/invalid sessions.
+      // Only proceed if we have a cryptographically verified user.
+      if (error || !user) {
+        return null;
       }
-    } catch {
-      // Continue to next check
-    }
-  }
 
-  // 2. Try headers (x-company-id, x-user-id)
-  if (!companyId) {
-    companyId = req.headers.get('x-company-id');
-  }
-  if (!userId) {
-    userId = req.headers.get('x-user-id');
-  }
+      // Use the admin client to fetch the profile — bypasses RLS safely
+      // because the identity has already been verified by Supabase Auth above.
+      const adminClient = createAdminClient();
+      if (!adminClient) {
+        // No service-role key available; cannot verify company membership.
+        return null;
+      }
 
-  // 3. Fallback to default company if none supplied
-  if (!companyId) {
-    companyId = '11111111-1111-4111-8111-111111111111';
-  }
-
-  // Fetch role from Supabase or storage
-  let role: ServerUserSession['role'] = 'owner';
-  let email = 'admin@kazibox.com';
-  let name = 'Admin KaziBox';
-
-  if (isSupabaseConfigured() && userId) {
-    const supabase: any = createAdminClient();
-    if (supabase) {
-      const { data: profile } = await supabase
+      const { data: profile } = await (adminClient as any)
         .from('profiles')
-        .select('*')
-        .eq('id', userId)
+        .select('id, role, email, name, company_id')
+        .eq('id', user.id)
         .maybeSingle();
 
-      if (profile) {
-        role = (profile.role as any) || 'owner';
-        email = profile.email || email;
-        name = profile.name || name;
-        companyId = profile.company_id || companyId;
+      if (!profile) {
+        // Authenticated Supabase user exists but has no profile row yet.
+        // This can happen during sign-up race conditions; treat as unauthorised.
+        return null;
       }
+
+      return {
+        userId: profile.id as string,
+        companyId: profile.company_id as string,
+        role: (profile.role as ServerUserSession['role']) || 'worker',
+        email: (profile.email as string) || user.email || '',
+        name: (profile.name as string) || '',
+      };
     }
   }
 
-  if (!userId) {
-    const store = getStore();
-    const defaultUser = store.users.find((u) => u.company_id === companyId) || store.users[0];
-    if (defaultUser) {
-      userId = defaultUser.id;
-      role = defaultUser.role as any;
-      email = defaultUser.email;
-      name = defaultUser.name;
-    } else {
-      userId = 'usr-admin-1';
-    }
+  // ── Fallback: demo/offline mode only ────────────────────────────────────
+  // Supabase is not configured (local demo).  The plain-JSON kazibox_session
+  // cookie is used solely to keep the local demo UI functional.
+  // THIS PATH MUST NOT BE REACHED IN A PRODUCTION DEPLOYMENT.
+  const sessionCookie = req.cookies.get('kazibox_session')?.value;
+  if (!sessionCookie) {
+    return null;
   }
+  try {
+    const decoded = JSON.parse(decodeURIComponent(sessionCookie));
+    const { userId, companyId } = decoded as { userId?: string; companyId?: string };
+    if (!userId || !companyId) {
+      return null;
+    }
+    // In demo mode we have no Supabase, so we cannot verify the role from a DB.
+    // Default to 'owner' here only because the local demo store always has
+    // a single owner user and Supabase is not present to verify anything anyway.
+    return { userId, companyId, role: 'owner', email: '', name: '' };
+  } catch {
+    return null;
+  }
+}
 
-  return {
-    userId,
-    companyId: companyId || '11111111-1111-4111-8111-111111111111',
-    role,
-    name,
-    email,
-  };
+/**
+ * Convenience guard: returns true only if session exists and the caller
+ * belongs to the specified company.
+ */
+export function sessionBelongsToCompany(
+  session: ServerUserSession | null,
+  companyId: string
+): session is ServerUserSession {
+  return !!session && session.companyId === companyId;
+}
+
+/**
+ * Returns true for privileged roles that may perform sensitive admin writes.
+ */
+export function isPrivilegedRole(
+  roleOrSession: ServerUserSession | ServerUserSession['role'] | null
+): boolean {
+  if (!roleOrSession) return false;
+  const role =
+    typeof roleOrSession === 'string' ? roleOrSession : roleOrSession.role;
+  return role === 'owner' || role === 'platform_admin';
 }

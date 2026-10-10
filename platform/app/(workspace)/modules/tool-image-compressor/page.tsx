@@ -18,6 +18,7 @@ export default function ImageCompressorPage() {
   const [quality, setQuality] = useState<number>(75);
   const [maxDimension, setMaxDimension] = useState<number>(1280);
   const [format, setFormat] = useState<'image/jpeg' | 'image/webp'>('image/jpeg');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -85,6 +86,15 @@ export default function ImageCompressorPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Validate file size (max 20MB)
+    const maxSize = 20 * 1024 * 1024; // 20MB
+    if (file.size > maxSize) {
+      setErrorMessage(t('file_too_large') ?? 'File exceeds 20MB limit');
+      return;
+    } else {
+      setErrorMessage(null);
+    }
 
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalFile(file);
@@ -198,6 +208,14 @@ export default function ImageCompressorPage() {
             >
               + {language === 'fr' ? 'Choisir une photo / image' : 'Choose Photo / Image'}
             </Button>
+{errorMessage && (
+  <div className="mt-2 flex items-center text-sm text-red-600">
+    <span>{errorMessage}</span>
+    <Button variant="outline" size="sm" onClick={() => setErrorMessage(null)} className="ml-2">
+      {language === 'fr' ? 'Réinitialiser' : 'Reset'}
+    </Button>
+  </div>
+)}
           </div>
         </Card>
       ) : (

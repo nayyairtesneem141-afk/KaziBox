@@ -46,6 +46,15 @@ export function hashSecret(secret: string): string {
 
 /**
  * Authenticates module API requests against the Module Registry.
+ *
+ * Security contract (Phase 1 remediation):
+ *   - Keys MUST be resolved from Supabase `module_api_keys` or the in-memory
+ *     store by cryptographic hash / prefix only. String-sniffing bypasses
+ *     (e.g. apiKey.includes('demo')) have been removed entirely.
+ *   - The workspace bound to the API key is authoritative. A caller-supplied
+ *     x-workspace-id or ?workspaceId that differs from the key's company is
+ *     rejected with 403 WORKSPACE_MISMATCH.
+ *   - Hard-coded fallback workspace identities have been removed.
  */
 export async function authenticateModuleApiKey(
   req: NextRequest,
@@ -91,7 +100,7 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 3. Resolve API Key in Supabase or Storage
+  // 3. Resolve API Key (Supabase first, then in-memory store; no dev bypasses)
   const store = getStore();
   const computedHash = hashSecret(apiKey);
   let targetModuleId: string | undefined;
@@ -114,23 +123,17 @@ export async function authenticateModuleApiKey(
   }
 
   if (!targetModuleId) {
+    // Fall back to in-memory store – hash/prefix match ONLY, no string-sniffing.
     const matchingKey = store.apiKeys.find(
       (k) =>
         k.hashedSecret === computedHash ||
-        apiKey.startsWith(k.prefix.replace('...', '')) ||
-        (apiKey.includes('demo') && k.moduleId === 'demo')
+        apiKey.startsWith(k.prefix.replace('...', ''))
     );
-    targetModuleId = matchingKey?.moduleId;
-  }
-
-  // Fallback for direct development testing with mock keys
-  if (!targetModuleId) {
-    if (apiKey.includes('demo') || apiKey === 'kz_test_demo_key') {
-      targetModuleId = 'demo';
-    } else if (apiKey.includes('hotel') || apiKey === 'kz_test_hotel_key') {
-      targetModuleId = 'hotel-property';
-    } else if (apiKey.includes('garage')) {
-      targetModuleId = 'garage';
+    if (matchingKey) {
+      targetModuleId = matchingKey.moduleId;
+      if (!targetCompanyId) {
+        targetCompanyId = (matchingKey as any).companyId;
+      }
     }
   }
 
@@ -196,14 +199,46 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 7. Resolve Workspace Context
+  // 7. Resolve and validate Workspace Context.
+  // The API key is bound to `targetCompanyId`. Any caller-supplied workspace ID
+  // MUST match that company – cross-tenant promotion is rejected.
   const queryWsId = req.nextUrl?.searchParams?.get('workspaceId');
-  const requestedWsId = req.headers.get('x-workspace-id') || queryWsId || targetCompanyId || '11111111-1111-4111-8111-111111111111';
-  const workspace = store.workspaces.find((w) => w.id === requestedWsId || w.company_id === requestedWsId) || {
-    id: requestedWsId,
-    company_id: requestedWsId,
-    name: 'Hôtel & Résidence Palmeraie',
-    country: 'Côte d’Ivoire',
+  const requestedWsId = req.headers.get('x-workspace-id') || queryWsId;
+
+  if (requestedWsId && targetCompanyId && requestedWsId !== targetCompanyId) {
+    return {
+      errorResponse: NextResponse.json(
+        {
+          error: 'Forbidden',
+          code: 'WORKSPACE_MISMATCH',
+          message: 'The supplied workspace ID does not match the API key company.',
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  const resolvedWsId = targetCompanyId || requestedWsId;
+  if (!resolvedWsId) {
+    return {
+      errorResponse: NextResponse.json(
+        {
+          error: 'Unauthorized',
+          code: 'WORKSPACE_UNKNOWN',
+          message: 'Unable to determine workspace for this API key.',
+        },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const workspace = store.workspaces.find(
+    (w) => w.id === resolvedWsId || w.company_id === resolvedWsId
+  ) || {
+    id: resolvedWsId,
+    company_id: resolvedWsId,
+    name: '',
+    country: '',
     currency: 'XOF',
     language: 'fr',
     logo_url: '',
@@ -221,4 +256,3 @@ export async function authenticateModuleApiKey(
     },
   };
 }
-

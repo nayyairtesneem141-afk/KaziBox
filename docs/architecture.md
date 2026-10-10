@@ -1,5 +1,687 @@
 # KaziBox — System Architecture & Modular Integration Guide
+KAZIBOX — PHASE 4
+SUPABASE PRODUCTION DATA LAYER MIGRATION
 
+We are now starting Phase 4.
+
+You already know the KaziBox codebase and the architecture you built in the previous phases.
+
+The architecture document is the source of truth.
+
+IMPORTANT:
+Do not redesign the architecture.
+Do not rename established concepts.
+Do not create duplicate models.
+Do not rebuild working UI.
+
+The objective of Phase 4 is to replace the current typed persistent mock data store with a real Supabase/Postgres backend while preserving the existing KaziBox contracts, UI, module architecture, API contracts, and security model.
+
+==================================================
+ARCHITECTURE THAT MUST BE PRESERVED
+==================================================
+
+KaziBox is one platform with multiple modules.
+
+The monorepo structure remains:
+
+/platform
+/packages/ui
+/packages/sdk
+/modules/demo
+/docs
+
+The platform remains responsible for:
+
+- authentication
+- company/workspace tenancy
+- RBAC
+- team access
+- settings
+- notifications
+- centralized billing
+- module orchestration
+
+The SDK remains the shared contract between the platform and modules.
+
+The Demo Module remains an example of an external module.
+
+Do NOT turn modules into separate applications.
+
+==================================================
+1. TENANCY — IMPORTANT
+==================================================
+
+The established tenant identifier is:
+
+company_id
+
+Do NOT introduce a competing workspace_id tenancy model.
+
+The architecture explicitly defines every tenant as a unique company_id.
+
+All tenant-owned records must be securely scoped to company_id.
+
+Preserve the existing application terminology and types where possible.
+
+If the application internally uses workspace terminology for UI purposes, that is fine, but the existing database/authorization architecture must continue using the established company/tenant model rather than creating a second tenancy system.
+
+==================================================
+2. EXISTING DATA LAYER
+==================================================
+
+The existing data-access layer is already located in:
+
+/platform/lib/
+
+including:
+
+auth.ts
+workspace.ts
+team.ts
+notifications.ts
+modules.ts
+billing.ts
+registry.ts
+finance.ts
+
+These currently use a typed persistent mock data store designed to mimic Supabase client responses.
+
+The architecture specifically intends these methods to map approximately 1:1 to:
+
+supabase.auth
+supabase.from(...)
+
+Do NOT rewrite the UI to talk directly to Supabase everywhere.
+
+Instead:
+
+UI
+↓
+existing platform/lib services
+↓
+Supabase
+
+Preserve the current service boundaries.
+
+==================================================
+3. SUPABASE SETUP
+==================================================
+
+Add/configure the official Supabase integration required by the existing Next.js architecture.
+
+Use appropriate:
+
+- browser client
+- server client
+- middleware/session handling where required
+- server-side privileged operations where appropriate
+
+Do not expose the Supabase service-role key to the browser.
+
+Required environment variables must be documented.
+
+Do not commit secrets.
+
+==================================================
+4. DATABASE SCHEMA
+==================================================
+
+Create the real PostgreSQL schema corresponding to the existing KaziBox models.
+
+Before creating a new table, inspect the existing types and mock-store structures.
+
+The database should support the existing concepts:
+
+- companies / tenants
+- profiles/users where required
+- team members
+- roles
+- modules
+- module subscriptions
+- billing
+- notifications
+- finance records
+- webhook events
+- module API key metadata
+- activity/events where already represented
+
+Do not invent duplicate concepts.
+
+Use the existing architecture and TypeScript types as the source of truth.
+
+Use:
+
+company_id
+
+as the tenant boundary.
+
+Use proper foreign keys and constraints.
+
+==================================================
+5. RBAC
+==================================================
+
+Preserve the existing four-role architecture:
+
+platform_admin
+owner
+manager
+worker
+
+The rules are:
+
+platform_admin:
+- platform infrastructure
+- Module Registry
+- platform-level administration
+
+owner:
+- workspace/company settings
+- centralized billing
+- team management
+- activated modules
+
+manager:
+- active modules
+- workspace settings
+- notifications
+- NO billing management
+- NO module catalogue activation
+
+worker:
+- operational module workflows only
+- NO Team
+- NO Billing
+
+These permissions must not exist only in React.
+
+They must be enforced through server-side authorization and Supabase RLS where applicable.
+
+==================================================
+6. ROW LEVEL SECURITY
+==================================================
+
+This is the highest-priority security task in Phase 4.
+
+Enable RLS on all tenant-owned tables.
+
+Every policy must respect company_id and authenticated membership.
+
+A member of Company A must never be able to access Company B's:
+
+- team
+- settings
+- notifications
+- module subscriptions
+- finance records
+- billing records
+- activity
+- other tenant-owned data
+
+Do not rely on frontend filtering.
+
+Do not trust a company_id supplied by the browser without authorization.
+
+Implement secure membership checks.
+
+Be careful about recursive RLS policies.
+
+Use secure helper functions / SECURITY DEFINER functions where appropriate.
+
+Platform-level data must have separate authorization rules for platform_admin.
+
+==================================================
+7. AUTHENTICATION
+==================================================
+
+Replace mock authentication persistence with real Supabase Auth.
+
+Preserve the existing authentication UI.
+
+Implement:
+
+- registration
+- login
+- logout
+- session persistence
+- current authenticated user
+- protected routes
+
+Map the authenticated Supabase user to the existing KaziBox profile/team/company model.
+
+Do not break the existing auth.ts API consumed by the rest of the platform.
+
+==================================================
+8. COMPANY / TEAM
+==================================================
+
+Persist the existing company and team architecture.
+
+A user must only see companies they are actually associated with.
+
+Preserve the existing roles and access checks.
+
+Team management must update real Supabase records.
+
+Verify that changing membership/role does not accidentally grant access across tenants.
+
+==================================================
+9. MODULES
+==================================================
+
+Persist the existing module registry and module subscription architecture.
+
+Preserve the ModuleManifest contract.
+
+The database must support:
+
+- module metadata
+- internal/external kind
+- status
+- developer
+- pricing
+- manifest/configuration
+- module subscription/activation
+- company association
+
+The Module Registry remains restricted to:
+
+platform_admin
+
+Do not move module registry authorization into frontend-only logic.
+
+==================================================
+10. MODULE ACCESS
+==================================================
+
+Preserve:
+
+hasModuleAccess(companyId, moduleId)
+
+and the existing subscription rules:
+
+- active
+- expiring_soon
+- all_access
+- includedModuleIds
+
+Do not change the public behavior of:
+
+<RequireAccess moduleId="...">
+
+The real database should now become the source of truth for subscription/access state.
+
+==================================================
+11. BILLING
+==================================================
+
+Preserve the existing centralized billing architecture.
+
+One company has one consolidated KaziBox subscription.
+
+Plans remain:
+
+- Single Module
+- Bundle
+- All Access
+- Build Your Own
+
+Do not create billing inside individual modules.
+
+Do not implement real payment provider integration in this phase unless it is already explicitly implemented and required by the current code.
+
+The existing mocked checkout/integration hooks may remain placeholders.
+
+Persist the subscription state correctly in Supabase.
+
+==================================================
+12. SHARED FINANCE
+==================================================
+
+Preserve the existing shared finance architecture.
+
+There must be ONE shared finance ledger.
+
+Do NOT create:
+
+hotel_revenue
+hotel_expenses
+garage_revenue
+garage_expenses
+taxi_revenue
+etc.
+
+Use the existing finance model:
+
+workspace/company
++
+module
++
+type
++
+amount
++
+currency
++
+reference
++
+occurredAt
+
+The existing architecture requires idempotency so the same reference cannot create duplicate financial rows.
+
+Preserve that behavior at the database/service layer.
+
+The existing public finance functions must continue working:
+
+getFinanceSummary
+getFinanceByModule
+getFinanceTimeline
+
+The global dashboard must continue using:
+
+getModuleSummaries
+
+and the shared finance functions.
+
+==================================================
+13. INTEGRATION API
+==================================================
+
+Preserve the existing Phase 3 public integration API:
+
+GET  /api/v1/context
+POST /api/v1/finance/revenue
+POST /api/v1/finance/expenses
+POST /api/v1/events
+GET  /api/v1/subscription
+
+These APIs must now read/write real persistent data where applicable.
+
+Do not break the existing contracts.
+
+Continue requiring idempotency references for finance ingestion.
+
+Verify tenant/module authorization before accepting data.
+
+A module must never be able to submit finance records for another company.
+
+==================================================
+14. SSO / MODULE TOKEN
+==================================================
+
+Preserve:
+
+issueModuleToken
+verifyModuleToken
+
+and the existing token claims:
+
+userId
+workspaceId/company context
+role
+language
+currency
+moduleId
+iat
+exp
+
+The existing development HMAC implementation may remain where appropriate, but ensure secrets remain server-side.
+
+Do not expose signing secrets in browser bundles.
+
+Do not redesign the entire SSO architecture in Phase 4.
+
+The existing architecture already specifies migration toward RS256/JWKS for production.
+
+If that production migration is not required for this phase, clearly document it as a remaining production-hardening item rather than silently changing the contract.
+
+==================================================
+15. WEBHOOKS
+==================================================
+
+Persist the existing webhook event/queue architecture where required.
+
+Preserve:
+
+subscription.activated
+subscription.expired
+module.activated
+module.deactivated
+user.role_changed
+
+Preserve:
+
+x-kazibox-signature:
+sha256=<hex_digest>
+
+Do not weaken webhook verification.
+
+Do not expose webhook secrets.
+
+==================================================
+16. MODULE API KEYS
+==================================================
+
+Preserve the existing security architecture:
+
+The plaintext module secret is shown only once.
+
+The database retains only:
+
+- secure prefix
+- SHA-256 hash
+
+Never store plaintext module secrets.
+
+Never expose them through normal database reads.
+
+==================================================
+17. DEMO MODULE
+==================================================
+
+The Demo Module must continue working exactly through the existing public contracts.
+
+It currently consumes:
+
+issueModuleToken
+verifyModuleToken
+/api/v1/context
+/api/v1/subscription
+/api/v1/finance/*
+getDemoSummary
+
+After Phase 4, these should use the real persistent backend.
+
+The existing:
+
+Add Test Revenue
+Add Test Expense
+
+functionality must create real shared finance records.
+
+Verify that the global dashboard updates correctly.
+
+==================================================
+18. REMOVE MOCK PERSISTENCE CAREFULLY
+==================================================
+
+Do not simply delete the mock store.
+
+First implement the Supabase-backed versions of the existing /platform/lib methods.
+
+Then replace the mock implementation behind those service boundaries.
+
+The UI should require minimal or ideally zero changes.
+
+After migration:
+
+UI
+↓
+platform/lib/*
+↓
+Supabase
+
+The UI should NOT become:
+
+UI
+↓
+random Supabase queries
+
+Keep the architecture clean.
+
+==================================================
+19. MIGRATION / SEED DATA
+==================================================
+
+Create proper Supabase SQL migrations.
+
+Create seed data where necessary for:
+
+- initial module definitions
+- Demo Module
+- existing platform configuration
+
+Do not put real customer data into seeds.
+
+Document how to run migrations and seeds.
+
+==================================================
+20. TESTING
+==================================================
+
+Run:
+
+npm run build
+
+Then test:
+
+AUTH
+- register
+- login
+- logout
+- refresh/session persistence
+
+TENANCY
+- Company A sees A
+- Company B sees B
+- A cannot see B
+- B cannot see A
+
+RBAC
+- platform_admin
+- owner
+- manager
+- worker
+
+MODULES
+- catalogue
+- activation
+- My Modules
+- access guard
+- Demo Module
+
+FINANCE
+- revenue
+- expenses
+- idempotency
+- module filtering
+- global totals
+- dashboard
+
+BILLING
+- subscription persistence
+- access based on subscription
+
+API
+- context
+- finance revenue
+- finance expenses
+- events
+- subscription
+
+SECURITY
+- direct unauthorized API attempts
+- direct Supabase queries where practical
+- cross-company access attempts
+- role escalation attempts
+
+PWA/UI
+- French
+- English
+- mobile
+- desktop
+
+==================================================
+21. IMPORTANT REGRESSION RULE
+==================================================
+
+Do not redesign the existing application.
+
+Do not change the visual system.
+
+Do not change ModuleManifest.
+
+Do not change the public SDK contracts.
+
+Do not break existing API routes.
+
+Do not build Hotel yet.
+
+Do not build Garage yet.
+
+Do not build Taxi yet.
+
+Phase 4 is about making the existing KaziBox core REAL and SECURE.
+
+==================================================
+22. AI DEVELOPMENT REQUIREMENT
+==================================================
+
+Use AI aggressively to accelerate implementation.
+
+However, review all generated:
+
+- SQL
+- RLS policies
+- authentication
+- authorization
+- API handlers
+- database queries
+- secret handling
+
+Do not blindly accept generated security code.
+
+Prefer small, testable migrations rather than one giant rewrite.
+
+==================================================
+23. COMPLETION REPORT
+==================================================
+
+When finished, provide:
+
+1. Exact migrations created
+2. Tables created/changed
+3. RLS policies created
+4. Auth implementation changes
+5. Company/team changes
+6. Module changes
+7. Billing changes
+8. Finance changes
+9. API changes
+10. Webhook changes
+11. Files changed
+12. Environment variables required
+13. Mock data removed/replaced
+14. Tests performed
+15. Cross-company security test results
+16. npm run build result
+17. Remaining production-hardening items
+
+Do not claim Phase 4 is complete if RLS and cross-company isolation have not been tested.
+
+START PHASE 4 IMPLEMENTATION NOW.
+
+Work incrementally and keep the existing architecture intact.
 ## 1. Monorepo Organization & Workspaces
 KaziBox is engineered as a clean TypeScript npm monorepo with strict package boundaries:
 
