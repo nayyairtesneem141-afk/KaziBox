@@ -218,6 +218,75 @@ export const Sidebar: React.FC = () => {
           </div>
         )}
 
+        {/* Free Utilities Dynamic Section: Accessible to all users in all workspaces */}
+        <div className="pt-2 border-t border-[#E5E7EB]">
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-[11px] font-black text-[#9CA3AF] uppercase tracking-wider">
+              {language === 'fr' ? 'Outils Gratuits' : 'Free Tools'}
+            </span>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+              4
+            </span>
+          </div>
+
+          <div className="space-y-1 mt-1">
+            {[
+              {
+                id: 'tool-qr-code',
+                name: { fr: 'Générateur QR', en: 'QR Code Generator' },
+                icon: '📱',
+                href: '/modules/tool-qr-code',
+                color: '#10B981',
+              },
+              {
+                id: 'tool-image-compressor',
+                name: { fr: 'Compresseur Photo', en: 'Image Compressor' },
+                icon: '🖼️',
+                href: '/modules/tool-image-compressor',
+                color: '#3B82F6',
+              },
+              {
+                id: 'tool-margin-calculator',
+                name: { fr: 'Calculateur Marge', en: 'Margin Calculator' },
+                icon: '🧮',
+                href: '/modules/tool-margin-calculator',
+                color: '#F59E0B',
+              },
+              {
+                id: 'tool-img-to-pdf',
+                name: { fr: 'Convertisseur PDF', en: 'JPG to PDF' },
+                icon: '📄',
+                href: '/modules/tool-img-to-pdf',
+                color: '#EC4899',
+              },
+            ].map((tool) => {
+              const isActive = pathname === tool.href || pathname.startsWith(tool.href);
+              const toolName = localize(tool.name, language) || tool.id;
+
+              return (
+                <Link
+                  key={tool.id}
+                  href={tool.href}
+                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl font-bold text-xs min-h-[42px] transition-all ${
+                    isActive
+                      ? 'bg-emerald-50 text-emerald-800 shadow-sm border border-emerald-200'
+                      : 'text-[#4B5563] hover:text-[#1F2937] hover:bg-[#F9FAFB]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <span className="text-base shrink-0">{tool.icon}</span>
+                    <span className="truncate">{toolName}</span>
+                  </div>
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0 ml-2"
+                    style={{ backgroundColor: tool.color }}
+                  />
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Platform Admin Registry Section: Strictly visible only for platform_admin */}
         {isPlatformAdmin && (
           <div className="pt-2 border-t border-[#E5E7EB]">

@@ -220,7 +220,7 @@ export default function ImageCompressorPage() {
         {compressedUrl && (
           <a
             href={compressedUrl}
-            download={`compressed_${originalFile?.name || 'image'}.${format === 'image/webp' ? 'webp' : 'jpg'}`}
+            download={`compressed_${(originalFile?.name || 'image').replace(/\.[^/.]+$/, '')}.${format === 'image/webp' ? 'webp' : 'jpg'}`}
           >
             <Button variant="primary" size="sm">
               ⬇ {language === 'fr' ? 'Télécharger l’image compressée' : 'Download Compressed'}
@@ -392,7 +392,7 @@ export default function ImageCompressorPage() {
               {compressedUrl && (
                 <a
                   href={compressedUrl}
-                  download={`compressed_${originalFile?.name || 'image'}.${format === 'image/webp' ? 'webp' : 'jpg'}`}
+                  download={`compressed_${(originalFile?.name || 'image').replace(/\.[^/.]+$/, '')}.${format === 'image/webp' ? 'webp' : 'jpg'}`}
                   className="block w-full"
                 >
                   <Button variant="primary" size="md" className="w-full justify-center font-bold">

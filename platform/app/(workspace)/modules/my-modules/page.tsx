@@ -34,6 +34,7 @@ export default function MyModulesPage() {
     ]);
     setSubscription(sub);
 
+    const freeMods = allMods.filter((m) => m.pricing_type === 'free');
     if (sub) {
       const activeList = allMods.filter((m) => {
         if (m.pricing_type === 'free') return true;
@@ -45,7 +46,7 @@ export default function MyModulesPage() {
       });
       setModules(activeList);
     } else {
-      setModules([]);
+      setModules(freeMods);
     }
 
     setLoading(false);
@@ -157,9 +158,15 @@ export default function MyModulesPage() {
             const modName = localize(mod.name, language) || mod.id;
             const modTagline = localize(mod.tagline, language);
 
-            const subStatus = subscription?.status || 'active';
-            const statusBadgeVariant =
-              subStatus === 'active' ? 'green' : subStatus === 'expiring_soon' ? 'yellow' : 'gray';
+            const isFree = mod.pricing_type === 'free';
+            const subStatus = isFree ? 'active' : (subscription?.status || 'active');
+            const statusBadgeVariant = isFree
+              ? 'green'
+              : subStatus === 'active'
+              ? 'green'
+              : subStatus === 'expiring_soon'
+              ? 'yellow'
+              : 'gray';
 
             return (
               <Card
@@ -179,7 +186,9 @@ export default function MyModulesPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-lg font-bold text-[#1F2937]">{modName}</h3>
                       <Badge variant={statusBadgeVariant} size="sm">
-                        {subStatus === 'active'
+                        {isFree
+                          ? '✓ ' + (language === 'fr' ? 'Outil Gratuit' : 'Free Tool')
+                          : subStatus === 'active'
                           ? t('common.active')
                           : subStatus === 'expiring_soon'
                           ? t('my_modules.status_expiring_soon')
@@ -189,7 +198,15 @@ export default function MyModulesPage() {
                     </div>
                     <p className="text-xs text-[#6B7280] line-clamp-1">{modTagline}</p>
                     <div className="text-[11px] text-[#6B7280] mt-1">
-                      {t('my_modules.valid_until')} : <strong>{expiryDate}</strong>
+                      {isFree ? (
+                        <span className="text-emerald-700 font-bold">
+                          ✓ {language === 'fr' ? 'Accès gratuit & illimité' : 'Free & Unlimited access'}
+                        </span>
+                      ) : (
+                        <>
+                          {t('my_modules.valid_until')} : <strong>{expiryDate}</strong>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -203,8 +220,8 @@ export default function MyModulesPage() {
                     </Button>
                   </Link>
 
-                  {/* Renew & Deactivate: strictly owner only */}
-                  {isOwner && (
+                  {/* Renew & Deactivate: strictly owner only, for paid modules */}
+                  {isOwner && !isFree && (
                     <>
                       <Link href={`/billing?action=renew&module=${mod.id}`}>
                         <Button variant="outline" size="sm" className="min-h-[40px]">

@@ -693,6 +693,100 @@ export default function ConsolidatedDashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Free Business Utilities Quick Launch Section */}
+      <div className="space-y-4 pt-6 border-t border-[#E5E7EB]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-black text-[#1F2937]">
+                {language === 'fr' ? 'Outils Métier Gratuits & Utilitaires' : 'Free Business Tools & Utilities'}
+              </h3>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                100% {language === 'fr' ? 'Gratuit' : 'Free'}
+              </span>
+            </div>
+            <p className="text-xs text-[#6B7280]">
+              {language === 'fr'
+                ? 'Utilitaires immédiatement opérationnels pour votre commerce sans abonnement requis'
+                : 'Instantly usable utilities for your daily business with no subscription required'}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            {
+              id: 'tool-qr-code',
+              title: { fr: 'Générateur QR Code', en: 'QR Code Generator' },
+              desc: { fr: 'Liens web, accès Wi-Fi, WhatsApp et cartes marchandes', en: 'Web links, Wi-Fi sharing, WhatsApp, contact cards' },
+              icon: '📱',
+              href: '/modules/tool-qr-code',
+              color: '#10B981',
+              badge: { fr: 'Scan Mobile', en: 'Mobile Scan' },
+            },
+            {
+              id: 'tool-image-compressor',
+              title: { fr: 'Compresseur Photo', en: 'Image Compressor' },
+              desc: { fr: 'Réduisez le poids de vos photos jusqu’à -85% sans perte', en: 'Compress photos up to 85% to save bandwidth' },
+              icon: '🖼️',
+              href: '/modules/tool-image-compressor',
+              color: '#3B82F6',
+              badge: { fr: 'JPG / WebP', en: 'JPG / WebP' },
+            },
+            {
+              id: 'tool-margin-calculator',
+              title: { fr: 'Calculateur de Marge', en: 'Margin Calculator' },
+              desc: { fr: 'Marge commerciale, taux de marque, TVA 18% et remises', en: 'Profit margins, markup, VAT 18%, and discount rates' },
+              icon: '🧮',
+              href: '/modules/tool-margin-calculator',
+              color: '#F59E0B',
+              badge: { fr: 'TVA UEMOA', en: 'UEMOA VAT' },
+            },
+            {
+              id: 'tool-img-to-pdf',
+              title: { fr: 'Convertisseur PDF', en: 'JPG to PDF Converter' },
+              desc: { fr: 'Assemblez photos, reçus et factures en document PDF', en: 'Combine receipts and photos into a clean PDF' },
+              icon: '📄',
+              href: '/modules/tool-img-to-pdf',
+              color: '#EC4899',
+              badge: { fr: 'A4 / Lettre', en: 'A4 / Letter' },
+            },
+          ].map((tool) => (
+            <div
+              key={tool.id}
+              className="bg-white rounded-2xl p-5 border border-[#E5E7EB] hover:shadow-lg transition-all duration-200 flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div
+                    className="w-11 h-11 rounded-xl flex items-center justify-center text-2xl shadow-sm border border-black/5"
+                    style={{ backgroundColor: `${tool.color}15`, color: tool.color }}
+                  >
+                    {tool.icon}
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-600">
+                    {localize(tool.badge, language)}
+                  </span>
+                </div>
+
+                <h4 className="font-bold text-[#1F2937] text-sm mb-1">
+                  {localize(tool.title, language)}
+                </h4>
+                <p className="text-xs text-[#6B7280] line-clamp-2 leading-relaxed mb-4">
+                  {localize(tool.desc, language)}
+                </p>
+              </div>
+
+              <Link href={tool.href} className="w-full">
+                <Button variant="outline" size="sm" className="w-full text-xs font-bold justify-center hover:bg-zinc-50">
+                  {language === 'fr' ? 'Ouvrir l’outil' : 'Launch Tool'} &rarr;
+                </Button>
+              </Link>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

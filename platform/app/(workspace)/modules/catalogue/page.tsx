@@ -47,19 +47,17 @@ export default function ModuleCataloguePage() {
 
   // Handle module or free tool activation
   const handleActivate = async (mod: ModuleManifest) => {
-    if (!workspace || !isOwner) return;
+    if (!workspace) return;
 
     const isFree = mod.pricing_type === 'free';
 
-    // If it's a free tool, activate directly without billing
+    // If it's a free tool, open directly without billing
     if (isFree) {
-      setActionLoading(mod.id);
-      await activateModule(workspace.company_id, mod.id);
-      await loadData();
-      setActionLoading(null);
       router.push(mod.entryUrl || `/modules/${mod.slug}`);
       return;
     }
+
+    if (!isOwner) return;
 
     // Check if current subscription already covers it (or if All Access)
     const isCovered =
