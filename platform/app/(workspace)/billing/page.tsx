@@ -46,6 +46,10 @@ function BillingPageContent() {
   );
 
   // Payment Form State
+  const [country, setCountry] = useState<'CI' | 'SN' | 'CM' | 'CD'>('CI');
+  const [referralCode, setReferralCode] = useState('');
+  const [pendingReference, setPendingReference] = useState('');
+  const [moteurReady, setMoteurReady] = useState(true);
   const [paymentMethod, setPaymentMethod] = useState<'mobile_money' | 'card'>('mobile_money');
   const [operator, setOperator] = useState('Wave');
   const [phoneNumber, setPhoneNumber] = useState('+225 07 12 34 56');
@@ -75,6 +79,17 @@ function BillingPageContent() {
       setSelectedModuleIds(s.includedModuleIds || []);
       setSelectedPlanId(s.planId || 'single');
     }
+
+    try {
+      const cfgRes = await fetch('/api/v1/billing/config');
+      if (cfgRes.ok) {
+        const cfgData = await cfgRes.json();
+        setMoteurReady(Boolean(cfgData.moteurReady));
+      }
+    } catch {
+      // Keep default
+    }
+
     setLoading(false);
   };
 
@@ -134,19 +149,56 @@ function BillingPageContent() {
     }
   };
 
+  // Status Polling Effect for Moteur Payment Lifecycle
+  useEffect(() => {
+    if (checkoutStage !== 'waiting' || !pendingReference) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(pendingReference)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!isMounted) return;
+
+        if (data.status === 'succeeded') {
+          setSuccessInvoiceId(`INV-${pendingReference}`);
+          setCheckoutStage('success');
+          await loadData();
+        } else if (data.status === 'failed' || data.status === 'expired') {
+          alert(t('billing.payment_failed'));
+          setCheckoutStage('form');
+        }
+      } catch {
+        // Continue polling
+      }
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [checkoutStage, pendingReference]);
+
   const handleExecuteCheckout = async () => {
     if (!workspace) return;
 
-    // Transition to "Waiting for approval" screen
     setCheckoutStage('waiting');
 
-    // Simulate pawaPay USSD push or Card 3D-Secure approval
+    const currencyMap: Record<string, string> = {
+      CD: 'USD',
+      CM: 'XAF',
+      SN: 'XOF',
+      CI: 'XOF',
+    };
+
     const result = await startCheckout({
       companyId: workspace.company_id,
       planId: selectedPlanId,
       billingCycle,
       moduleIds: selectedPlanId === 'all_access' ? publishedModules.map((m) => m.id) : selectedModuleIds,
       paymentMethod,
+      country,
       operator,
       phoneNumber,
       cardName,
@@ -154,15 +206,17 @@ function BillingPageContent() {
       cardExpiry,
       cardCvc,
       amount: calculateTotal(),
-      currency: 'XOF',
+      currency: currencyMap[country] || 'XOF',
+      referralCode: referralCode.trim() || undefined,
     });
 
     if (result.success) {
-      setSuccessInvoiceId(result.invoiceId || 'INV-2026-999');
-      setCheckoutStage('success');
-      await loadData();
+      const ref = result.reference || `KZ-${Date.now()}`;
+      setPendingReference(ref);
+      // Client unconditionally enters waiting stage.
+      // Paid access is ONLY unlocked once server polling cryptographically confirms success.
     } else {
-      alert(result.error || 'Erreur lors du paiement');
+      alert(result.error || result.message || t('billing.payment_failed'));
       setCheckoutStage('form');
     }
   };
@@ -446,17 +500,35 @@ function BillingPageContent() {
           {checkoutStage === 'waiting' && (
             <Card padding="lg" className="text-center py-16 max-w-xl mx-auto border-2 border-[var(--kazibox-primary,#6D28D9)]">
               <div className="w-20 h-20 rounded-full bg-[var(--kazibox-primary-soft,#F3E8FF)] text-[var(--kazibox-primary,#6D28D9)] flex items-center justify-center text-3xl mx-auto mb-6 animate-pulse">
-                📱
+                ⚡
               </div>
+              <Badge variant="purple" size="md" className="mb-3">
+                {t('billing.moteur_infrastructure_label')}
+              </Badge>
               <h3 className="text-2xl font-black text-[#1F2937] mb-2">
                 {t('billing.waiting_approval_title')}
               </h3>
-              <p className="text-sm text-[#4B5563] max-w-md mx-auto leading-relaxed mb-6">
+              <p className="text-sm text-[#4B5563] max-w-md mx-auto leading-relaxed mb-4">
                 {paymentMethod === 'mobile_money'
-                  ? `Une demande de paiement de ${calculateTotal().toLocaleString()} XOF a été envoyée au ${phoneNumber} via ${operator}. Veuillez confirmer avec votre code secret sur votre téléphone.`
-                  : `Traitement de votre carte bancaire ${cardNumber.slice(-4)} par le protocole sécurisé 3D-Secure...`}
+                  ? `Une demande de paiement sécurisée de ${calculateTotal().toLocaleString()} ${country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} (Libellé: KaziBox) a été initiée via Moteur au ${phoneNumber}.`
+                  : `Traitement sécurisé de votre carte bancaire ${cardNumber.slice(-4)} via l'infrastructure Moteur...`}
               </p>
-              <div className="w-12 h-12 border-4 border-[var(--kazibox-primary,#6D28D9)] border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed mb-6">
+                En attente de la confirmation cryptographique du paiement. Vos modules seront débloqués dès validation.
+              </p>
+              <div className="w-12 h-12 border-4 border-[var(--kazibox-primary,#6D28D9)] border-t-transparent rounded-full animate-spin mx-auto mb-6" />
+              <div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setCheckoutStage('form');
+                    setPendingReference('');
+                  }}
+                >
+                  Annuler / Modifier
+                </Button>
+              </div>
             </Card>
           )}
 
@@ -736,9 +808,54 @@ function BillingPageContent() {
 
                 {/* Right: Payment Method & Execution */}
                 <Card padding="lg">
-                  <h3 className="text-lg font-bold text-[#1F2937] mb-4">
-                    {t('billing.payment_method_title')}
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-[#1F2937]">
+                      {t('billing.payment_method_title')}
+                    </h3>
+                    <Badge variant="purple" size="sm">
+                      Moteur
+                    </Badge>
+                  </div>
+
+                  {/* Priority Country Selector */}
+                  <div className="mb-5">
+                    <label className="text-xs font-bold text-[#374151] mb-1.5 block">
+                      {t('billing.country_label')} :
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { code: 'CI', name: 'Côte d’Ivoire', cur: 'XOF' },
+                        { code: 'SN', name: 'Sénégal', cur: 'XOF' },
+                        { code: 'CM', name: 'Cameroun', cur: 'XAF' },
+                        { code: 'CD', name: 'RDC Congo', cur: 'USD' },
+                      ].map((c) => (
+                        <button
+                          key={c.code}
+                          type="button"
+                          onClick={() => setCountry(c.code as any)}
+                          className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all text-center ${
+                            country === c.code
+                              ? 'bg-[var(--kazibox-primary,#6D28D9)] text-white border-[var(--kazibox-primary,#6D28D9)] shadow-sm'
+                              : 'bg-white text-[#4B5563] border-[#E5E7EB] hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="truncate">{c.name}</div>
+                          <div className="text-[10px] opacity-80">{c.cur}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Payment Description & Infrastructure Badge */}
+                  <div className="p-3 bg-[#F9FAFB] rounded-xl border border-[#E5E7EB] text-xs text-[#4B5563] mb-5 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{t('billing.payment_description_label')} :</span>
+                      <Badge variant="purple" size="sm">KaziBox</Badge>
+                    </div>
+                    <p className="text-[11px] text-[#6B7280]">
+                      {t('billing.moteur_provider_note')}
+                    </p>
+                  </div>
 
                   {/* Method Picker Tabs */}
                   <div className="grid grid-cols-2 gap-3 mb-5">
@@ -772,7 +889,6 @@ function BillingPageContent() {
                   {/* Mobile Money Details */}
                   {paymentMethod === 'mobile_money' ? (
                     <div className="space-y-4">
-                      {/* Operator Picker */}
                       <div>
                         <label className="text-xs font-bold text-[#374151] mb-1.5 block">
                           Opérateur Mobile Money :
@@ -800,7 +916,7 @@ function BillingPageContent() {
                         value={phoneNumber}
                         onChange={(e) => setPhoneNumber(e.target.value)}
                         placeholder="+225 07 00 00 00"
-                        helperText="Un push USSD sera envoyé sur ce numéro pour validation immédiate."
+                        helperText="Validation sécurisée via l'infrastructure Moteur."
                       />
                     </div>
                   ) : (
@@ -835,18 +951,39 @@ function BillingPageContent() {
                     </div>
                   )}
 
+                  {/* Referral Code (Preserves Attribution for Moteur) */}
+                  <div className="mt-4 pt-3 border-t border-[#E5E7EB]">
+                    <Input
+                      label={t('billing.referral_code_label')}
+                      value={referralCode}
+                      onChange={(e) => setReferralCode(e.target.value)}
+                      placeholder={t('billing.referral_code_placeholder')}
+                      helperText="Attribution transmise à Moteur pour la gestion des commissions partenaires."
+                    />
+                  </div>
+
                   {/* Submission CTA */}
                   <div className="mt-6 pt-4 border-t border-[#E5E7EB]">
+                    {!moteurReady && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-4 leading-relaxed">
+                        <div className="font-bold flex items-center gap-1.5 mb-1">
+                          <span>⚠️</span>
+                          <span>{t('billing.moteur_infrastructure_label')}</span>
+                        </div>
+                        <p>{t('billing.moteur_pending_notice')}</p>
+                      </div>
+                    )}
+
                     <Button
                       variant="primary"
                       size="lg"
                       className="w-full font-black text-sm min-h-[48px]"
                       onClick={handleExecuteCheckout}
                     >
-                      Payer {calculateTotal().toLocaleString()} XOF et Activer &rarr;
+                      Payer {calculateTotal().toLocaleString()} {country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} via Moteur &rarr;
                     </Button>
                     <p className="text-[11px] text-[#9CA3AF] text-center mt-2">
-                      Paiement simulé sécurisé &bull; Validation en un clic
+                      Infrastructure centralisée Moteur &bull; Activation sur confirmation réelle
                     </p>
                   </div>
                 </Card>

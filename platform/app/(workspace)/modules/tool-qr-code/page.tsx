@@ -5,72 +5,7 @@ import Link from 'next/link';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useTranslation } from '@/lib/i18n';
 
-// Simple robust client-side QR generator implementation (Type 1-10 numerical & byte matrix)
-// Using an embedded lightweight QR Code algorithm for zero-dependency offline PWA compatibility
-function generateQrMatrix(text: string): boolean[][] {
-  // Simple fallback deterministic pseudo-matrix based on character hash if text is empty
-  const clean = text || 'https://kazibox.com';
-  const size = 25; // Standard 25x25 QR module grid
-  const matrix: boolean[][] = Array.from({ length: size }, () => Array(size).fill(false));
-
-  // Finder patterns at (0,0), (0, size-7), (size-7, 0)
-  const drawFinder = (startX: number, startY: number) => {
-    for (let r = 0; r < 7; r++) {
-      for (let c = 0; c < 7; c++) {
-        if (
-          r === 0 || r === 6 || c === 0 || c === 6 ||
-          (r >= 2 && r <= 4 && c >= 2 && c <= 4)
-        ) {
-          matrix[startY + r][startX + c] = true;
-        } else {
-          matrix[startY + r][startX + c] = false;
-        }
-      }
-    }
-  };
-
-  drawFinder(0, 0);
-  drawFinder(size - 7, 0);
-  drawFinder(0, size - 7);
-
-  // Timing patterns
-  for (let i = 8; i < size - 8; i++) {
-    matrix[6][i] = i % 2 === 0;
-    matrix[i][6] = i % 2 === 0;
-  }
-
-  // Populate data area deterministically from text bytes
-  let bitIndex = 0;
-  const bytes = Array.from(new TextEncoder().encode(clean));
-  // Add some padding and checksum bytes
-  while (bytes.length < 32) bytes.push((bytes.length * 37) % 256);
-
-  for (let c = size - 1; c > 0; c -= 2) {
-    if (c === 6) c--; // Skip vertical timing
-    for (let r = 0; r < size; r++) {
-      const row = (Math.floor(bitIndex / 2) % 2 === 0) ? (size - 1 - r) : r;
-      for (let col = c; col >= c - 1; col--) {
-        // Skip finders
-        if (
-          (col < 9 && row < 9) ||
-          (col > size - 9 && row < 9) ||
-          (col < 9 && row > size - 9) ||
-          (row === 6 || col === 6)
-        ) {
-          continue;
-        }
-        const byte = bytes[Math.floor(bitIndex / 8) % bytes.length];
-        const bit = ((byte >> (7 - (bitIndex % 8))) & 1) === 1;
-        // Simple mask: (row + col) % 2 === 0
-        const mask = (row + col) % 2 === 0;
-        matrix[row][col] = mask ? !bit : bit;
-        bitIndex++;
-      }
-    }
-  }
-
-  return matrix;
-}
+import QRCode from 'qrcode';
 
 export default function QrCodeGeneratorPage() {
   const { t, language } = useTranslation();
@@ -90,6 +25,7 @@ export default function QrCodeGeneratorPage() {
   const [fgColor, setFgColor] = useState('#1F2937');
   const [bgColor, setBgColor] = useState('#FFFFFF');
   const [copied, setCopied] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -108,30 +44,39 @@ export default function QrCodeGeneratorPage() {
     payload = `WIFI:S:${wifiSsid};T:${wifiSecurity};P:${wifiPassword};;`;
   }
 
-  // Draw canvas
+  // Draw QR code onto canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
 
-    const matrix = generateQrMatrix(payload);
-    const size = matrix.length;
-    const scale = 14; // Canvas size = 25 * 14 = 350px
-    canvas.width = size * scale;
-    canvas.height = size * scale;
+    if (!payload.trim()) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      setQrError(null);
+      return;
+    }
 
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = fgColor;
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        if (matrix[r][c]) {
-          ctx.fillRect(c * scale, r * scale, scale, scale);
+    QRCode.toCanvas(
+      canvas,
+      payload,
+      {
+        width: 350,
+        margin: 2,
+        color: {
+          dark: fgColor,
+          light: bgColor,
+        },
+        errorCorrectionLevel: 'M',
+      },
+      (error) => {
+        if (error) {
+          console.error('QR code generation error:', error);
+          setQrError(error.message || 'Generation failed');
+        } else {
+          setQrError(null);
         }
       }
-    }
+    );
   }, [payload, fgColor, bgColor]);
 
   const handleDownloadPng = () => {
@@ -385,11 +330,16 @@ export default function QrCodeGeneratorPage() {
               </p>
             </div>
 
-            <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-200 shadow-inner flex items-center justify-center my-2">
+            <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-200 shadow-inner flex flex-col items-center justify-center my-2">
               <canvas
                 ref={canvasRef}
                 className="w-64 h-64 rounded-xl shadow-sm border border-black/5 bg-white"
               />
+              {qrError && (
+                <p className="text-xs text-red-500 font-bold mt-2">
+                  ⚠️ {qrError}
+                </p>
+              )}
             </div>
 
             <div className="w-full mt-4 space-y-2">

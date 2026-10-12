@@ -354,8 +354,15 @@
     "status": "Statut",
     "receipt": "Reçu",
     "included": "Inclus",
-    "invoices_count": "factures",
-    "download_pdf": "Reçu PDF"
+    "download_pdf": "Reçu PDF",
+    "moteur_infrastructure_label": "Infrastructure de paiement Moteur",
+    "country_label": "Pays de règlement",
+    "referral_code_label": "Code Ambassadeur / Parrainage (optionnel)",
+    "referral_code_placeholder": "Ex: AMB-2026-XOF",
+    "payment_description_label": "Libellé de paiement",
+    "moteur_pending_notice": "L’infrastructure de paiement centralisée Moteur est en attente de configuration des identifiants finaux du client. Vos accès seront validés automatiquement dès réception des clés de production.",
+    "moteur_provider_note": "Les moyens de paiement actifs (Mobile Money, Carte) sont configurés et sécurisés centralement par Moteur pour chaque pays.",
+    "payment_failed": "Le paiement n’a pas abouti ou a été refusé."
   },
   "admin": {
     "registry_nav": "Registre Modules",

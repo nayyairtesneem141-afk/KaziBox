@@ -23,6 +23,8 @@ export default function ImageCompressorPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [isDragging, setIsDragging] = useState(false);
+
   // Format file size helper
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 B';
@@ -34,74 +36,124 @@ export default function ImageCompressorPage() {
 
   const compressImage = (file: File, q: number, maxDim: number, fmt: string) => {
     setIsProcessing(true);
+    setErrorMessage(null);
     const reader = new FileReader();
+
+    reader.onerror = () => {
+      setErrorMessage(language === 'fr' ? 'Impossible de lire le fichier.' : 'Failed to read the image file.');
+      setIsProcessing(false);
+    };
+
     reader.onload = (e) => {
       const img = new Image();
-      img.onload = () => {
-        // Calculate proportional dimensions
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
 
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          setIsProcessing(false);
-          return;
-        }
-
-        // Fill white background in case of transparent PNGs converted to JPEG
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              if (compressedUrl) URL.revokeObjectURL(compressedUrl);
-              const url = URL.createObjectURL(blob);
-              setCompressedUrl(url);
-              setCompressedSize(blob.size);
-            }
-            setIsProcessing(false);
-          },
-          fmt,
-          q / 100
-        );
+      img.onerror = () => {
+        setErrorMessage(language === 'fr' ? 'Fichier image non valide ou corrompu.' : 'Invalid or corrupted image file.');
+        setIsProcessing(false);
       };
+
+      img.onload = () => {
+        try {
+          // Calculate proportional dimensions
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            setErrorMessage(language === 'fr' ? 'Erreur de rendu canvas.' : 'Canvas render error.');
+            setIsProcessing(false);
+            return;
+          }
+
+          // Fill white background in case of transparent PNGs converted to JPEG
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                if (compressedUrl) URL.revokeObjectURL(compressedUrl);
+                const url = URL.createObjectURL(blob);
+                setCompressedUrl(url);
+                setCompressedSize(blob.size);
+              } else {
+                setErrorMessage(language === 'fr' ? 'Échec de compression du fichier.' : 'Failed to compress image.');
+              }
+              setIsProcessing(false);
+            },
+            fmt,
+            q / 100
+          );
+        } catch (err: any) {
+          console.error('Image compression error:', err);
+          setErrorMessage(err?.message || (language === 'fr' ? 'Erreur de traitement' : 'Processing error'));
+          setIsProcessing(false);
+        }
+      };
+
       img.src = e.target?.result as string;
     };
+
     reader.readAsDataURL(file);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setErrorMessage(language === 'fr' ? 'Veuillez sélectionner un fichier image valide (JPG, PNG, WebP).' : 'Please select a valid image file (JPG, PNG, WebP).');
+      return;
+    }
 
     // Validate file size (max 20MB)
     const maxSize = 20 * 1024 * 1024; // 20MB
     if (file.size > maxSize) {
       setErrorMessage(t('file_too_large') ?? 'File exceeds 20MB limit');
       return;
-    } else {
-      setErrorMessage(null);
     }
 
+    setErrorMessage(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalFile(file);
     setOriginalSize(file.size);
     setOriginalUrl(URL.createObjectURL(file));
 
     compressImage(file, quality, maxDimension, format);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
   };
 
   const handleQualityChange = (newQuality: number) => {
@@ -179,7 +231,17 @@ export default function ImageCompressorPage() {
 
       {!originalFile ? (
         /* Dropzone Card */
-        <Card padding="lg" className="border-dashed border-2 border-blue-200 text-center py-16 bg-blue-50/20">
+        <Card
+          padding="lg"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`border-dashed border-2 text-center py-16 transition-colors ${
+            isDragging
+              ? 'border-blue-500 bg-blue-100/50'
+              : 'border-blue-200 bg-blue-50/20'
+          }`}
+        >
           <div className="max-w-md mx-auto space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center text-3xl mx-auto">
               📁

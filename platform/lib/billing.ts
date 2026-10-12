@@ -161,7 +161,8 @@ export interface CheckoutParams {
   planId: string;
   billingCycle: 'monthly' | 'yearly';
   moduleIds: string[];
-  paymentMethod: 'mobile_money' | 'card';
+  paymentMethod?: 'mobile_money' | 'card';
+  country?: 'CD' | 'CM' | 'SN' | 'CI';
   operator?: string;
   phoneNumber?: string;
   cardName?: string;
@@ -170,119 +171,96 @@ export interface CheckoutParams {
   cardCvc?: string;
   amount: number;
   currency?: string;
+  referralCode?: string;
 }
 
 /**
- * Start checkout stub for centralized billing
+ * Initiates checkout session via Moteur centralized payment infrastructure.
+ *
+ * CRITICAL RULE:
+ * Paid access is NEVER granted through a simulated timer.
+ * Entitlements are only activated upon authentic, verified payment confirmation.
  */
 export async function startCheckout(params: CheckoutParams): Promise<{
   success: boolean;
-  subscription?: Subscription;
+  status: 'pending' | 'succeeded' | 'failed' | 'expired' | 'refunded' | 'cancelled';
+  reference?: string;
+  sessionId?: string;
   invoiceId?: string;
+  checkoutUrl?: string;
   error?: string;
+  message?: string;
 }> {
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
-  const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-  const now = new Date();
-  const nextPeriod = new Date(now);
-  if (params.billingCycle === 'yearly') {
-    nextPeriod.setFullYear(nextPeriod.getFullYear() + 1);
-  } else {
-    nextPeriod.setMonth(nextPeriod.getMonth() + 1);
-  }
-
-  const updatedSubscription: Subscription = {
-    id: `sub-${Date.now()}`,
-    companyId: params.companyId,
-    planId: params.planId,
-    status: 'active',
-    billingCycle: params.billingCycle,
-    includedModuleIds: params.moduleIds,
-    currentPeriodStart: now.toISOString(),
-    currentPeriodEnd: nextPeriod.toISOString(),
-    renewAt: nextPeriod.toISOString(),
-    autoRenew: true,
-    amount: params.amount,
-    currency: params.currency || 'XOF',
-  };
-
-  if (isSupabaseConfigured() && typeof window !== 'undefined') {
-    const supabase: any = createBrowserClient();
-    if (supabase) {
-      // Upsert subscription
-      await supabase.from('subscriptions').insert({
-        company_id: params.companyId,
-        plan_id: params.planId,
-        status: 'active',
-        current_period_start: now.toISOString(),
-        current_period_end: nextPeriod.toISOString(),
-        cancel_at_period_end: false,
-        included_module_ids: params.moduleIds,
+  // If in browser, invoke server checkout route
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: params.companyId,
+          planId: params.planId,
+          billingCycle: params.billingCycle,
+          moduleIds: params.moduleIds,
+          country: params.country || 'CI',
+          amount: params.amount,
+          currency: params.currency || 'XOF',
+          referralCode: params.referralCode,
+          customer: {
+            phone: params.phoneNumber,
+            name: params.cardName,
+          },
+        }),
       });
 
-      // Insert payment history
-      await supabase.from('payment_history').insert({
-        company_id: params.companyId,
-        amount: params.amount,
-        currency: params.currency || 'XOF',
-        status: 'paid',
-        description: `Formule ${params.planId} (${params.billingCycle})`,
-        invoice_url: '#',
-      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return {
+          success: false,
+          status: 'failed',
+          error: data.errorMessage || data.error || data.message || 'Échec de l’initialisation du paiement',
+          message: data.errorMessage || data.message,
+        };
+      }
+
+      return {
+        success: true,
+        status: data.status || 'pending',
+        reference: data.reference,
+        sessionId: data.sessionId,
+        invoiceId: `INV-${data.reference || Date.now()}`,
+        checkoutUrl: data.checkoutUrl,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        status: 'failed',
+        error: err.message || 'Erreur réseau lors de l’initialisation de la commande',
+      };
     }
   }
 
-  // Also update local store
-  const store = getStore();
-  const existingIdx = store.subscriptions.findIndex((s) => s.companyId === params.companyId);
-  if (existingIdx !== -1) {
-    store.subscriptions[existingIdx] = updatedSubscription;
-  } else {
-    store.subscriptions.push(updatedSubscription);
-  }
-  setStoreItem('SUBSCRIPTIONS', store.subscriptions);
-
-  const planObj = PLANS.find((p) => p.id === params.planId);
-  const planTitle = typeof planObj?.name === 'string' ? planObj.name : planObj?.name?.fr || params.planId;
-
-  const newPayment: PaymentHistoryItem = {
-    id: `pay-${Date.now()}`,
-    invoiceNumber,
+  // Server-side direct initiation
+  const { moteurService } = await import('./moteur/service');
+  const result = await moteurService.createCheckoutSession({
     companyId: params.companyId,
-    date: now.toISOString(),
+    planId: params.planId,
+    billingCycle: params.billingCycle,
+    moduleIds: params.moduleIds,
+    country: params.country || 'CI',
     amount: params.amount,
     currency: params.currency || 'XOF',
-    planName: `Formule ${planTitle} (${params.billingCycle === 'yearly' ? 'Annuel' : 'Mensuel'})`,
-    moduleCount: params.moduleIds.length,
-    paymentMethod: params.paymentMethod,
-    operator: params.paymentMethod === 'mobile_money' ? params.operator || 'Mobile Money' : 'Carte Bancaire',
-    status: 'paid',
-    receiptUrl: '#',
-  };
-
-  store.payments.unshift(newPayment);
-  setStoreItem('PAYMENTS', store.payments);
-
-  await notifySubscriptionActivated(params.companyId, planTitle);
-
-  for (const modId of params.moduleIds) {
-    await dispatchWebhookEvent(
-      'subscription.activated',
-      {
-        workspaceId: params.companyId,
-        planId: params.planId,
-        billingCycle: params.billingCycle,
-        renewAt: nextPeriod.toISOString(),
-      },
-      modId
-    );
-  }
+    referralCode: params.referralCode,
+  });
 
   return {
-    success: true,
-    subscription: updatedSubscription,
-    invoiceId: invoiceNumber,
+    success: result.success,
+    status: result.status,
+    reference: result.reference,
+    sessionId: result.sessionId,
+    invoiceId: `INV-${result.reference}`,
+    checkoutUrl: result.checkoutUrl,
+    error: result.errorMessage,
   };
 }
 

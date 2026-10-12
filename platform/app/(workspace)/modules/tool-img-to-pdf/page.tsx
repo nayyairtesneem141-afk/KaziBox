@@ -4,6 +4,7 @@ import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { useTranslation } from '@/lib/i18n';
+import { jsPDF } from 'jspdf';
 
 interface ImageItem {
   id: string;
@@ -21,6 +22,7 @@ export default function JpgToPdfConverterPage() {
   const [pageSize, setPageSize] = useState<'A4' | 'Letter'>('A4');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedPdfUrl, setGeneratedPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -37,6 +39,7 @@ export default function JpgToPdfConverterPage() {
     }));
 
     setImages((prev) => [...prev, ...newItems]);
+    setPdfError(null);
     if (generatedPdfUrl) {
       URL.revokeObjectURL(generatedPdfUrl);
       setGeneratedPdfUrl(null);
@@ -73,147 +76,72 @@ export default function JpgToPdfConverterPage() {
     });
   };
 
-  // Pure Client-side PDF Generation without heavy dependencies
+  // Robust Client-side PDF Generation with jsPDF
   const generatePdf = async () => {
     if (images.length === 0) return;
     setIsGenerating(true);
+    setPdfError(null);
 
     try {
-      // Dimensions in points (72 points per inch)
-      // A4: 595 x 842 points
-      const pw = orientation === 'portrait' ? 595 : 842;
-      const ph = orientation === 'portrait' ? 842 : 595;
+      const format = pageSize.toLowerCase() as 'a4' | 'letter';
+      const doc = new jsPDF({
+        orientation,
+        unit: 'pt',
+        format,
+      });
 
-      // We construct a valid PDF 1.4 document
-      const objects: string[] = [];
-      const offsets: number[] = [];
-      let pdfContent = '%PDF-1.4\n';
+      const pw = doc.internal.pageSize.getWidth();
+      const ph = doc.internal.pageSize.getHeight();
 
-      const addObject = (content: string) => {
-        offsets.push(pdfContent.length);
-        const objNumber = objects.length + 1;
-        const entry = `${objNumber} 0 obj\n${content}\nendobj\n`;
-        pdfContent += entry;
-        objects.push(entry);
-        return objNumber;
-      };
+      for (let i = 0; i < images.length; i++) {
+        if (i > 0) {
+          doc.addPage(format, orientation);
+        }
 
-      // Read images as JPEGs via canvas
-      const processedImages: Array<{ dataUri: string; width: number; height: number; rawBytes: Uint8Array }> = [];
-      for (const item of images) {
+        const item = images[i];
         const img = new Image();
-        await new Promise((res) => {
-          img.onload = res;
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error(`Failed to load image: ${item.name}`));
           img.src = item.previewUrl;
         });
 
+        // Use canvas to ensure format compatibility and white background for transparency
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
-        const ctx = canvas.getContext('2d')!;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) continue;
+
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, img.width, img.height);
         ctx.drawImage(img, 0, 0);
 
-        const jpegBlob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/jpeg', 0.85));
-        const arrayBuf = await jpegBlob.arrayBuffer();
-        processedImages.push({
-          dataUri: canvas.toDataURL('image/jpeg', 0.85),
-          width: img.width,
-          height: img.height,
-          rawBytes: new Uint8Array(arrayBuf),
-        });
-      }
-
-      // Root Catalog (obj 1) & Pages Tree (obj 2)
-      // We'll link pages together
-      const totalPages = processedImages.length;
-      const pageObjNumbers: number[] = [];
-
-      // For each image, we create:
-      // - Image XObject
-      // - Page content stream (cm and Do operators)
-      // - Page object
-      let currentObjIndex = 3; // reserve 1 (Catalog) and 2 (Pages)
-
-      for (let i = 0; i < totalPages; i++) {
-        const imgInfo = processedImages[i];
-        const imgObjNum = currentObjIndex++;
-        const contentStreamObjNum = currentObjIndex++;
-        const pageObjNum = currentObjIndex++;
-        pageObjNumbers.push(pageObjNum);
-
-        // Convert raw bytes to binary string
-        let binString = '';
-        for (let b = 0; b < imgInfo.rawBytes.length; b++) {
-          binString += String.fromCharCode(imgInfo.rawBytes[b]);
-        }
-
-        // 1. Image XObject
-        addObject(
-          `<< /Type /XObject /Subtype /Image /Width ${imgInfo.width} /Height ${imgInfo.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgInfo.rawBytes.length} >>\nstream\n${binString}\nendstream`
-        );
+        const jpegDataUri = canvas.toDataURL('image/jpeg', 0.9);
 
         // Scale image to fit page maintaining aspect ratio with 20pt margin
         const margin = 20;
         const availW = pw - margin * 2;
         const availH = ph - margin * 2;
         let drawW = availW;
-        let drawH = (imgInfo.height * availW) / imgInfo.width;
+        let drawH = (img.height * availW) / img.width;
         if (drawH > availH) {
           drawH = availH;
-          drawW = (imgInfo.width * availH) / imgInfo.height;
+          drawW = (img.width * availH) / img.height;
         }
         const drawX = (pw - drawW) / 2;
         const drawY = (ph - drawH) / 2;
 
-        const streamCmds = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${drawX.toFixed(2)} ${drawY.toFixed(2)} cm\n/Im${i + 1} Do\nQ\n`;
-
-        // 2. Content stream
-        addObject(
-          `<< /Length ${streamCmds.length} >>\nstream\n${streamCmds}endstream`
-        );
-
-        // 3. Page object
-        addObject(
-          `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im${i + 1} ${imgObjNum} 0 R >> >> /Contents ${contentStreamObjNum} 0 R >>`
-        );
+        doc.addImage(jpegDataUri, 'JPEG', drawX, drawY, drawW, drawH);
       }
 
-      // Catalog (obj 1)
-      const catalogObj = `<< /Type /Catalog /Pages 2 0 R >>`;
-      // Pages Tree (obj 2)
-      const pagesObj = `<< /Type /Pages /Kids [${pageObjNumbers.map((n) => `${n} 0 R`).join(' ')}] /Count ${totalPages} >>`;
-
-      // Prepend Catalog & Pages at the correct offsets
-      const fullObjects: string[] = [catalogObj, pagesObj, ...objects];
-      let completePdf = '%PDF-1.4\n';
-      const fullOffsets: number[] = [];
-
-      for (let i = 0; i < fullObjects.length; i++) {
-        fullOffsets.push(completePdf.length);
-        completePdf += `${i + 1} 0 obj\n${fullObjects[i]}\nendobj\n`;
-      }
-
-      const xrefOffset = completePdf.length;
-      completePdf += `xref\n0 ${fullObjects.length + 1}\n0000000000 65535 f \n`;
-      for (const off of fullOffsets) {
-        completePdf += `${off.toString().padStart(10, '0')} 00000 n \n`;
-      }
-      completePdf += `trailer\n<< /Size ${fullObjects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-      // Convert completePdf string to Uint8Array
-      const finalBytes = new Uint8Array(completePdf.length);
-      for (let i = 0; i < completePdf.length; i++) {
-        finalBytes[i] = completePdf.charCodeAt(i) & 0xff;
-      }
-
-      const blob = new Blob([finalBytes], { type: 'application/pdf' });
+      const blob = doc.output('blob');
       if (generatedPdfUrl) URL.revokeObjectURL(generatedPdfUrl);
       const url = URL.createObjectURL(blob);
       setGeneratedPdfUrl(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error('PDF Generation failed:', err);
+      setPdfError(err?.message || (language === 'fr' ? 'Échec de la génération du PDF' : 'PDF generation failed'));
     } finally {
       setIsGenerating(false);
     }
@@ -320,6 +248,13 @@ export default function JpgToPdfConverterPage() {
             >
               + {language === 'fr' ? 'Ajouter des photos / pages' : 'Add Photos / Pages'}
             </Button>
+
+            {/* Error Message */}
+            {pdfError && (
+              <div className="p-3 bg-red-50 rounded-xl border border-red-200 text-xs text-red-600 font-bold mt-2">
+                ⚠️ {pdfError}
+              </div>
+            )}
 
             {/* Download Generated PDF Section */}
             {generatedPdfUrl && (

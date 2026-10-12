@@ -354,8 +354,15 @@
     "status": "Status",
     "receipt": "Receipt",
     "included": "Included",
-    "invoices_count": "invoices",
-    "download_pdf": "PDF Receipt"
+    "download_pdf": "PDF Receipt",
+    "moteur_infrastructure_label": "Moteur Payment Infrastructure",
+    "country_label": "Billing Country",
+    "referral_code_label": "Ambassador / Referral Code (optional)",
+    "referral_code_placeholder": "E.g., AMB-2026-XOF",
+    "payment_description_label": "Payment Description",
+    "moteur_pending_notice": "The Moteur centralized payment infrastructure is awaiting final client production credentials. Access will be automatically confirmed upon client key deployment.",
+    "moteur_provider_note": "Active payment methods (Mobile Money, Card) are configured and secured centrally by Moteur for each target country.",
+    "payment_failed": "Payment failed or was declined."
   },
   "admin": {
     "registry_nav": "Module Registry",

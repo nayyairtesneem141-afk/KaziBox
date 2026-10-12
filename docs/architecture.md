@@ -813,13 +813,16 @@ Billing is fully centralized at the workspace level:
 2. **Isolated Financial Streams (Core Architectural Rule)**:
    - **SaaS Subscription Flow**: Workspace owners pay KaziBox for platform and module access.
    - **Customer Merchant Flow**: End-customer business transactions (hotel room bookings, garage repairs, taxi rides) flow **directly to the merchant’s own payment gateway or cash register**. KaziBox never touches, taxes, or bundles end-customer operational funds.
-3. **Mocked African Checkout & Integration Points**:
-   - **Mobile Money**: Operator picker (Wave, Orange Money, MTN MoMo, Moov) and phone number input.
-   - **Card**: Visa / Mastercard options.
-   - **Waiting for Approval**: Simulates USSD push notification prompting the user for phone pin confirmation.
-   - **Code Hooks**: Marked with `// TODO: Connect pawaPay Mobile Money API here (POST /v1/charges)` and `// TODO: Connect Card provider (Stripe / Paystack) here`.
+3. **Moteur Centralized Payment Infrastructure Architecture**:
+   - **Centralized Infrastructure**: Moteur acts as the single, centralized payment infrastructure for all payment providers. KaziBox does NOT duplicate direct integrations with pawaPay, Stripe, Paystack, or other providers.
+   - **Backend Separation**: Moteur runs on an independently controlled Supabase backend managed by an external developer. KaziBox connects via a typed, server-side adapter (`@/lib/moteur`).
+   - **Priority Countries**: DR Congo (`CD` - CDF/USD), Cameroon (`CM` - XAF), Senegal (`SN` - XOF), and Côte d'Ivoire (`CI` - XOF).
+   - **Payment Description**: Standardized to `"KaziBox"`.
+   - **Provider Neutrality**: Supported payment methods depend on providers actually enabled in Moteur; KaziBox never claims a provider is available until confirmed by Moteur.
+   - **Referral Attribution**: KaziBox preserves and passes referral/ambassador codes in payment session metadata. Ambassador commissions, wallets, and payouts are left entirely to Moteur without duplication.
+   - **Inbound Webhooks & Idempotency**: Cryptographically signed webhooks via `POST /api/v1/webhooks/moteur` confirm payments. Entitlements are activated strictly on verified payment confirmation, with idempotency guards preventing duplicate activations.
 4. **Subscription Lifecycle & Data Retention**:
-   - Module activation occurs immediately upon subscription validation.
+   - Module activation occurs only upon authentic, verified payment confirmation from Moteur.
    - Module deactivation asks for confirmation and preserves tenant data: *"Vos données sont conservées pendant 30 jours"* / *"Your data is kept for 30 days"*.
    - In-app notifications are automatically dispatched for module activation, deactivation, subscription activation, renewals, and payment alerts.
 

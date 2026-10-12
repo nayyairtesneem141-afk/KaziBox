@@ -52,13 +52,14 @@ CREATE POLICY tenant_isolation_policy ON finance_records
 - Replace the mock HMAC SHA-256 signer in `platform/lib/sso.ts` with asymmetric RS256 or EdDSA (using `jose` / `jsonwebtoken`).
 - Expose a standard OpenID Connect discovery document and JWKS endpoint (`/.well-known/jwks.json`) so external modules can verify tokens without shared symmetric secrets.
 
-### C. Server-Side Payment Gateway Verification
-- Verify pawaPay mobile money webhook signatures using the official cryptographic header:
+### C. Server-Side Payment Gateway Verification (Moteur Centralized Infrastructure)
+- Verify Moteur centralized payment webhook signatures using the official cryptographic header:
   ```typescript
-  const signature = req.headers.get('x-pawapay-signature');
-  const isValid = verifyPawaPaySignature(rawBody, signature, process.env.PAWAPAY_WEBHOOK_SECRET);
+  const signature = req.headers.get('x-moteur-signature') || req.headers.get('x-signature');
+  const isValid = adapter.verifyWebhookSignature(rawBody, signature);
   ```
-- Reject unauthenticated deposit status updates.
+- Strictly reject unauthenticated payment and deposit status updates.
+- Enforce idempotency on all inbound events to prevent duplicate subscription activation.
 
 ### D. Multi-Tenant Penetration & Bleed Testing
 - Run automated security test suites against at least two separate test tenants (`ws-tenant-alpha` and `ws-tenant-beta`).
