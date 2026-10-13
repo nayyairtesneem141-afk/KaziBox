@@ -125,7 +125,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export function ensureUuidCompanyId(id: string): string {
   if (id && UUID_REGEX.test(id)) return id;
-  return '22222222-2222-4222-8222-222222222222';
+  return id?.trim() || '';
 }
 
 /**
@@ -1110,6 +1110,12 @@ export async function addGarageJobItem(
 
   const itemTotal = Number(item.quantity) * Number(item.unit_price);
 
+  // Tenant verification: ensure job exists and belongs to company
+  const job = await getGarageJobById(companyId, jobId);
+  if (!job) {
+    return { success: false, error: 'Ordre de réparation introuvable dans cette entreprise.' };
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const { data: createdItem, error: itemErr } = await supabase
@@ -1129,10 +1135,10 @@ export async function addGarageJobItem(
 
     if (!itemErr && createdItem) {
       // Recalculate job totals
-      const { data: allItems } = await supabase.from('garage_job_items').select('total').eq('job_id', jobId);
+      const { data: allItems } = await supabase.from('garage_job_items').select('total').eq('job_id', jobId).eq('company_id', companyId);
       const newTotal = (allItems || []).reduce((sum: number, it: any) => sum + Number(it.total), 0);
 
-      const { data: jobData } = await supabase.from('garage_jobs').select('paid_amount').eq('id', jobId).single();
+      const { data: jobData } = await supabase.from('garage_jobs').select('paid_amount').eq('id', jobId).eq('company_id', companyId).single();
       const paid = Number(jobData?.paid_amount || 0);
       const outstanding = Math.max(0, newTotal - paid);
       const paymentStatus = outstanding === 0 ? 'paid' : paid > 0 ? 'partially_paid' : 'unpaid';
@@ -1145,7 +1151,8 @@ export async function addGarageJobItem(
           payment_status: paymentStatus,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', jobId);
+        .eq('id', jobId)
+        .eq('company_id', companyId);
 
       return { success: true, item: createdItem };
     }
@@ -1166,12 +1173,12 @@ export async function addGarageJobItem(
   };
   runtimeCache.items.push(fallbackItem);
 
-  const job = runtimeCache.jobs.find((j) => j.id === jobId && j.company_id === companyId);
-  if (job) {
+  const cachedJob = runtimeCache.jobs.find((j) => j.id === jobId && j.company_id === companyId);
+  if (cachedJob) {
     const items = runtimeCache.items.filter((i) => i.job_id === jobId);
-    job.total_amount = items.reduce((sum, i) => sum + i.total, 0);
-    job.outstanding_amount = Math.max(0, job.total_amount - job.paid_amount);
-    job.payment_status = job.outstanding_amount === 0 ? 'paid' : job.paid_amount > 0 ? 'partially_paid' : 'unpaid';
+    cachedJob.total_amount = items.reduce((sum, i) => sum + i.total, 0);
+    cachedJob.outstanding_amount = Math.max(0, cachedJob.total_amount - cachedJob.paid_amount);
+    cachedJob.payment_status = cachedJob.outstanding_amount === 0 ? 'paid' : cachedJob.paid_amount > 0 ? 'partially_paid' : 'unpaid';
   }
 
   return { success: true, item: fallbackItem };
@@ -1257,7 +1264,8 @@ export async function recordGaragePayment(
           payment_status: newPaymentStatus,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', jobId);
+        .eq('id', jobId)
+        .eq('company_id', companyId);
 
       // 3. Post to KaziBox Shared Finance layer with deterministic idempotent reference
       try {

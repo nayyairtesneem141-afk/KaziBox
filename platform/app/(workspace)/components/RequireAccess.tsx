@@ -1,12 +1,28 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/useSession';
-import { hasModuleAccess, getModule } from '@/lib/modules';
+import { getModuleEntitlement, getModule, ModuleEntitlement } from '@/lib/modules';
 import { useTranslation, localize } from '@/lib/i18n';
 import { Card, Button, Badge } from '@kazibox/ui';
 import { ModuleManifest } from '@kazibox/sdk';
+
+export interface ModuleAccessContextType {
+  moduleId: string;
+  entitlement: ModuleEntitlement;
+  isReadOnly: boolean;
+  isActive: boolean;
+}
+
+const ModuleAccessContext = createContext<ModuleAccessContextType>({
+  moduleId: '',
+  entitlement: 'none',
+  isReadOnly: false,
+  isActive: false,
+});
+
+export const useModuleAccess = () => useContext(ModuleAccessContext);
 
 interface RequireAccessProps {
   moduleId: string;
@@ -24,7 +40,7 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
   const { t, language } = useTranslation();
 
   const [loading, setLoading] = useState(true);
-  const [hasAccess, setHasAccess] = useState(false);
+  const [entitlement, setEntitlement] = useState<ModuleEntitlement>('none');
   const [moduleData, setModuleData] = useState<ModuleManifest | null>(null);
 
   const role = user?.role || 'worker';
@@ -33,24 +49,25 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
   useEffect(() => {
     let isMounted = true;
     async function checkAccess() {
-      if (!workspace) return;
+      const companyId = workspace?.company_id || workspace?.id;
+      if (!companyId) return;
       try {
-        const [access, mod] = await Promise.all([
-          hasModuleAccess(workspace.company_id, moduleId),
+        const [ent, mod] = await Promise.all([
+          getModuleEntitlement(companyId, moduleId),
           getModule(moduleId),
         ]);
         if (isMounted) {
-          setHasAccess(access);
+          setEntitlement(ent);
           setModuleData(mod);
           setLoading(false);
 
-          if (!access && autoRedirect && isOwner) {
+          if (ent === 'none' && autoRedirect && isOwner) {
             router.push(`/billing?plan=single&module=${moduleId}`);
           }
         }
       } catch (err) {
         if (isMounted) {
-          setHasAccess(false);
+          setEntitlement('none');
           setLoading(false);
         }
       }
@@ -73,10 +90,75 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
     );
   }
 
-  if (hasAccess) {
-    return <>{children}</>;
+  // Active full access
+  if (entitlement === 'active') {
+    return (
+      <ModuleAccessContext.Provider
+        value={{
+          moduleId,
+          entitlement: 'active',
+          isReadOnly: false,
+          isActive: true,
+        }}
+      >
+        {children}
+      </ModuleAccessContext.Provider>
+    );
   }
 
+  // Read-only historical access for expired/cancelled subscriptions
+  if (entitlement === 'read_only') {
+    return (
+      <ModuleAccessContext.Provider
+        value={{
+          moduleId,
+          entitlement: 'read_only',
+          isReadOnly: true,
+          isActive: false,
+        }}
+      >
+        <div className="space-y-6">
+          <div
+            role="alert"
+            aria-label="Subscription Expired"
+            className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-xl shadow-sm text-amber-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+          >
+            <div className="flex items-start gap-3">
+              <span className="text-2xl select-none" aria-hidden="true">⚠️</span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-bold text-amber-900">
+                    {t('billing.read_only_banner_title')}
+                  </h3>
+                  <Badge variant="yellow" size="sm">
+                    {t('billing.read_only_badge')}
+                  </Badge>
+                </div>
+                <p className="text-xs text-amber-800 mt-1 max-w-2xl leading-relaxed">
+                  {t('billing.read_only_banner_desc')}
+                </p>
+              </div>
+            </div>
+
+            {isOwner && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="whitespace-nowrap bg-white border-amber-300 hover:bg-amber-100 text-amber-900 font-semibold shadow-xs"
+                onClick={() => router.push(`/billing?plan=single&module=${moduleId}`)}
+              >
+                {t('billing.activate_module_plan')} &rarr;
+              </Button>
+            )}
+          </div>
+
+          {children}
+        </div>
+      </ModuleAccessContext.Provider>
+    );
+  }
+
+  // No entitlement (never subscribed)
   const moduleName = localize(moduleData?.name, language) || moduleId;
 
   return (
@@ -123,3 +205,4 @@ export const RequireAccess: React.FC<RequireAccessProps> = ({
     </div>
   );
 };
+

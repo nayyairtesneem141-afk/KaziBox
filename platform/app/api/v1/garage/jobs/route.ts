@@ -1,19 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from '@/lib/server-auth';
+import { requireServerAuth } from '@/lib/server-auth';
 import {
   getGarageJobs,
   createGarageJob,
   updateGarageJobStatus,
   addGarageJobItem,
-  ensureUuidCompanyId,
 } from '@/lib/garage';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(req);
   const { searchParams } = new URL(req.url);
-  const companyId = ensureUuidCompanyId(searchParams.get('companyId') || session?.companyId || '');
+  const targetCompanyId = searchParams.get('companyId');
+
+  const auth = await requireServerAuth(req, {
+    targetCompanyId,
+    requiredModuleId: 'garage-auto',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
   const filterStatus = searchParams.get('status') || undefined;
   const search = searchParams.get('search') || undefined;
 
@@ -22,15 +28,20 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ success: false, error: 'Malformed JSON payload' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const companyId = ensureUuidCompanyId(body.company_id || session?.companyId || '');
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'garage-auto',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
 
   // Check if adding item to existing job or creating new job
   if (body.action === 'add_item' && body.job_id && body.item) {
@@ -47,24 +58,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: result.error }, { status: 422 });
   }
 
-  return NextResponse.json({ success: true, job: result.job });
+  return NextResponse.json({ success: true, job: result.job }, { status: 201 });
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ success: false, error: 'Malformed JSON payload' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const { companyId: inputCompanyId, jobId, status } = body;
-  const companyId = ensureUuidCompanyId(inputCompanyId || session?.companyId || '');
-
+  const { jobId, status } = body;
   if (!jobId || !status) {
-    return NextResponse.json({ success: false, error: 'jobId and status are required' }, { status: 422 });
+    return NextResponse.json({ success: false, error: 'jobId et status sont obligatoires' }, { status: 422 });
   }
+
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'garage-auto',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
 
   const result = await updateGarageJobStatus(companyId, jobId, status);
   if (!result.success) {

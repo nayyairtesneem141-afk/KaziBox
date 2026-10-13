@@ -389,7 +389,7 @@ test('Adapter configured: formats request with description "KaziBox" and referra
 
   const adapter = new MockMoteurAdapter(
     {
-      baseUrl: 'https://api.moteur.internal',
+      baseUrl: 'https://moteur.kazibox.pro',
       apiKey: 'moteur_live_secret_key_123',
       webhookSecret: 'whsec_999',
     },
@@ -411,7 +411,7 @@ test('Adapter configured: formats request with description "KaziBox" and referra
 
   assertEqual(result.success, true);
   assertEqual(result.sessionId, 'sess_moteur_9988');
-  assertEqual(capturedUrl, 'https://api.moteur.internal/v1/checkout/sessions');
+  assertEqual(capturedUrl, 'https://moteur.kazibox.pro/v1/checkout/sessions');
   assertEqual(capturedHeaders['Authorization'], 'Bearer moteur_live_secret_key_123');
   assertEqual(capturedHeaders['X-Idempotency-Key'], 'KZ-TEST-002');
   assertEqual(capturedBody.description, 'KaziBox');

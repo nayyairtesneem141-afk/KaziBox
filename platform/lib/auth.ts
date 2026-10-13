@@ -173,7 +173,7 @@ export async function signInWithPassword(params: {
 }
 
 /**
- * Sign up new user and auto-create first workspace
+ * Sign up new user and auto-create first workspace via secure server-side flow
  */
 export async function signUp(params: {
   email: string;
@@ -183,98 +183,88 @@ export async function signUp(params: {
   companyName: string;
   country: string;
   currency: string;
-}): Promise<{ data: { session: AuthSession | null; user: User | null }; error: Error | null }> {
-  if (isSupabaseConfigured() && typeof window !== 'undefined') {
-    const supabase: any = createBrowserClient();
-    if (supabase) {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: params.email.trim(),
-        password: params.password || 'password123',
+}): Promise<{
+  data: {
+    session: AuthSession | null;
+    user: User | null;
+    requiresConfirmation?: boolean;
+  };
+  error: Error | null;
+}> {
+  // If running in browser, invoke the secure server-side registration endpoint
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
       });
 
-      if (authError) {
-        return { data: { session: null, user: null }, error: new Error(authError.message) };
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || !json?.success) {
+        return {
+          data: { session: null, user: null },
+          error: new Error(json?.message || 'Erreur lors de la création du compte.'),
+        };
       }
 
-      if (authData.user) {
-        // Create company in Supabase
-        const { data: company, error: companyError } = await supabase
-          .from('companies')
-          .insert({
-            name: params.companyName.trim(),
-            country: params.country || 'Côte d’Ivoire',
-            currency: params.currency || 'XOF',
-            language: 'fr',
-            plan: 'starter',
-            status: 'active',
-          })
-          .select()
-          .single();
+      // If email confirmation is required, return success with confirmation flag
+      if (json.requiresConfirmation) {
+        return {
+          data: {
+            session: null,
+            user: json.user as User,
+            requiresConfirmation: true,
+          },
+          error: null,
+        };
+      }
 
-        if (companyError || !company) {
-          return { data: { session: null, user: null }, error: new Error(companyError?.message || 'Erreur lors de la création de l’entreprise.') };
-        }
-
-        // Insert profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .insert({
-            id: authData.user.id,
-            email: params.email.trim(),
-            name: params.name.trim(),
-            phone: params.phone,
-            role: 'owner',
-            company_id: company.id,
-          })
-          .select()
-          .single();
-
-        // Insert team member
-        await supabase.from('team_members').insert({
-          company_id: company.id,
-          user_id: authData.user.id,
-          name: params.name.trim(),
-          email: params.email.trim(),
-          role: 'owner',
-          status: 'active',
+      // If email confirmation is NOT required and Supabase is configured:
+      if (isSupabaseConfigured()) {
+        const signInResult = await signInWithPassword({
+          email: params.email,
+          password: params.password,
         });
 
-        const workspace: Workspace = {
-          id: company.id,
-          company_id: company.id,
-          name: company.name,
-          country: company.country,
-          currency: company.currency,
-          language: company.language,
-          logo_url: company.logo_url || '',
-          created_at: company.created_at,
-          plan: company.plan as Workspace['plan'],
-          status: company.status as Workspace['status'],
-        };
+        if (!signInResult.error && signInResult.data.session) {
+          return {
+            data: {
+              session: signInResult.data.session,
+              user: signInResult.data.user,
+              requiresConfirmation: false,
+            },
+            error: null,
+          };
+        }
+      }
 
-        const user: User = {
-          id: profile?.id || authData.user.id,
-          email: params.email.trim(),
-          name: params.name.trim(),
-          phone: params.phone,
-          role: 'owner',
-          company_id: company.id,
-          created_at: profile?.created_at || new Date().toISOString(),
+      // If demo mode or session returned directly:
+      if (json.session) {
+        persistSession(json.session);
+        return {
+          data: {
+            session: json.session,
+            user: json.user as User,
+            requiresConfirmation: false,
+          },
+          error: null,
         };
-
-        const session: AuthSession = {
-          user,
-          workspace,
-          token: authData.session?.access_token || `token_${user.id}`,
+      }
+    } catch (err: any) {
+      if (isSupabaseConfigured()) {
+        return {
+          data: { session: null, user: null },
+          error: new Error(err?.message || 'Erreur réseau lors de l’inscription.'),
         };
-
-        persistSession(session);
-        return { data: { session, user }, error: null };
       }
     }
   }
 
-  // Local storage fallback
+  // Local storage fallback (offline mode)
   await new Promise((resolve) => setTimeout(resolve, 400));
   const store = getStore();
   const existing = store.users.find(
@@ -341,7 +331,7 @@ export async function signUp(params: {
   persistSession(session);
 
   return {
-    data: { session, user: newUser },
+    data: { session, user: newUser, requiresConfirmation: false },
     error: null,
   };
 }
@@ -361,16 +351,54 @@ export async function signOut(): Promise<{ error: Error | null }> {
 }
 
 /**
- * Send password reset email
+ * Send password reset email with recovery link redirect
  */
 export async function resetPasswordForEmail(
-  email: string
+  email: string,
+  redirectTo?: string
 ): Promise<{ error: Error | null }> {
   if (isSupabaseConfigured() && typeof window !== 'undefined') {
     const supabase = createBrowserClient();
     if (supabase) {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+      const targetUrl =
+        redirectTo ||
+        (typeof window !== 'undefined' ? `${window.location.origin}/reset-password` : undefined);
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: targetUrl,
+      });
       if (error) return { error: new Error(error.message) };
+      return { error: null };
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return { error: null };
+}
+
+/**
+ * Update authenticated user password
+ */
+export async function updatePassword(
+  newPassword: string
+): Promise<{ error: Error | null }> {
+  if (isSupabaseConfigured() && typeof window !== 'undefined') {
+    const supabase = createBrowserClient();
+    if (supabase) {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      if (error) return { error: new Error(error.message) };
+      return { error: null };
+    }
+  }
+
+  // Fallback for offline / demo mode
+  const session = await getSession();
+  if (session && typeof window !== 'undefined') {
+    const store = getStore();
+    const uIdx = store.users.findIndex((u) => u.id === session.user.id);
+    if (uIdx !== -1) {
+      store.users[uIdx].password_hash = newPassword;
+      setStoreItem('USERS', store.users);
     }
   }
   await new Promise((resolve) => setTimeout(resolve, 300));

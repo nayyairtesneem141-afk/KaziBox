@@ -1,7 +1,9 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from './supabase/server';
 import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
+import { hasModuleAccess, getModuleEntitlement, ModuleEntitlement } from './modules';
+import { getStore } from './storage';
 
 export interface ServerUserSession {
   userId: string;
@@ -11,6 +13,10 @@ export interface ServerUserSession {
   email?: string;
 }
 
+export type RequireAuthResult =
+  | { session: ServerUserSession; errorResponse?: never }
+  | { session?: never; errorResponse: NextResponse };
+
 /**
  * Resolves the authenticated session from an incoming API route request.
  *
@@ -19,43 +25,40 @@ export interface ServerUserSession {
  *   1. `createServerClient()` wires up @supabase/ssr which reads the Supabase
  *      JWT cookies set by the browser client (`sb-*-auth-token`).
  *   2. `supabase.auth.getUser()` verifies the JWT's cryptographic signature
- *      server-side via Supabase's token introspection endpoint.  A forged or
+ *      server-side via Supabase's token introspection endpoint. A forged or
  *      tampered token is always rejected here before any DB lookup.
  *   3. The authenticated user ID is then used to look up their `profiles` row
- *      with the service-role admin client (bypasses RLS — safe because the
- *      user has already been verified by Supabase Auth above).
- *   4. The profile's `company_id` is the authoritative tenant boundary.
- *      It is never read from any request header or from the plain-JSON
- *      `kazibox_session` cookie.
+ *      with the service-role admin client.
+ *   4. If `targetCompanyId` is requested:
+ *      - If user is `platform_admin`: permitted with role `platform_admin`.
+ *      - If user's primary company matches `targetCompanyId`: permitted with profile role.
+ *      - Otherwise, `team_members` is queried to verify active membership in `targetCompanyId`.
+ *        If verified, the session reflects `targetCompanyId` and the member's role in that workspace.
+ *        If not a member, access to that company is rejected.
+ *   5. If no `targetCompanyId` is requested:
+ *      - Checks `kazibox_session` cookie. If it specifies a company different from profile,
+ *        membership in that company is verified via `team_members`. If verified, that company
+ *        and role are used; otherwise falls back to the profile's primary company.
  *
  * Demo / offline fallback (Supabase NOT configured):
- *   - Falls back to the plain-JSON `kazibox_session` cookie so the local demo
- *     mode keeps working without breaking the UI.  This path is explicitly NOT
- *     safe against forgery and MUST NOT be reached in a production deployment
- *     that has Supabase configured.
- *
- * Headers `x-user-id`, `x-company-id`, and `x-workspace-id` are NEVER read.
+ *   - Uses `kazibox_session` cookie and verifies user and company against local store.
  */
-export async function getServerSession(req: NextRequest): Promise<ServerUserSession | null> {
+export async function getServerSession(
+  req: NextRequest,
+  targetCompanyId?: string | null
+): Promise<ServerUserSession | null> {
   // ── Primary: Supabase JWT validation ────────────────────────────────────
   if (isSupabaseConfigured()) {
-    // createServerClient() uses @supabase/ssr which wires next/headers cookies
-    // so it picks up the Supabase JWT session written during login.
     const supabaseAnon = createServerClient();
     if (supabaseAnon) {
       const { data: { user }, error } = await (supabaseAnon as any).auth.getUser();
 
-      // getUser() returns null user (not an error) for anonymous/invalid sessions.
-      // Only proceed if we have a cryptographically verified user.
       if (error || !user) {
         return null;
       }
 
-      // Use the admin client to fetch the profile — bypasses RLS safely
-      // because the identity has already been verified by Supabase Auth above.
       const adminClient = createAdminClient();
       if (!adminClient) {
-        // No service-role key available; cannot verify company membership.
         return null;
       }
 
@@ -66,42 +69,271 @@ export async function getServerSession(req: NextRequest): Promise<ServerUserSess
         .maybeSingle();
 
       if (!profile) {
-        // Authenticated Supabase user exists but has no profile row yet.
-        // This can happen during sign-up race conditions; treat as unauthorised.
         return null;
       }
 
-      return {
-        userId: profile.id as string,
-        companyId: profile.company_id as string,
-        role: (profile.role as ServerUserSession['role']) || 'worker',
-        email: (profile.email as string) || user.email || '',
-        name: (profile.name as string) || '',
-      };
+      const userRole = (profile.role as ServerUserSession['role']) || 'worker';
+      const userEmail = (profile.email as string) || user.email || '';
+      const userName = (profile.name as string) || '';
+
+      // Determine requested company
+      let desiredCompanyId = targetCompanyId?.trim();
+      if (!desiredCompanyId) {
+        // Check active workspace cookie
+        const sessionCookie = req.cookies.get('kazibox_session')?.value;
+        if (sessionCookie) {
+          try {
+            const decoded = JSON.parse(decodeURIComponent(sessionCookie));
+            if (decoded?.companyId) {
+              desiredCompanyId = decoded.companyId;
+            }
+          } catch {
+            // Ignore malformed cookie
+          }
+        }
+      }
+
+      // 1. If no specific target requested or target matches primary company
+      if (!desiredCompanyId || desiredCompanyId === profile.company_id) {
+        return {
+          userId: profile.id as string,
+          companyId: profile.company_id as string,
+          role: userRole,
+          email: userEmail,
+          name: userName,
+        };
+      }
+
+      // 2. Platform admin can access any workspace with platform_admin role
+      if (userRole === 'platform_admin') {
+        return {
+          userId: profile.id as string,
+          companyId: desiredCompanyId,
+          role: 'platform_admin',
+          email: userEmail,
+          name: userName,
+        };
+      }
+
+      // 3. User is requesting a different company: verify membership in team_members
+      const { data: member } = await (adminClient as any)
+        .from('team_members')
+        .select('role, status')
+        .eq('company_id', desiredCompanyId)
+        .or(`user_id.eq.${user.id},email.eq.${userEmail}`)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (member) {
+        return {
+          userId: profile.id as string,
+          companyId: desiredCompanyId,
+          role: (member.role as ServerUserSession['role']) || 'worker',
+          email: userEmail,
+          name: userName,
+        };
+      }
+
+      // If user specifically requested a company they don't belong to, return null
+      // (Caller will reject as 403 Forbidden via requireServerAuth)
+      return null;
     }
   }
 
   // ── Fallback: demo/offline mode only ────────────────────────────────────
-  // Supabase is not configured (local demo).  The plain-JSON kazibox_session
-  // cookie is used solely to keep the local demo UI functional.
-  // THIS PATH MUST NOT BE REACHED IN A PRODUCTION DEPLOYMENT.
   const sessionCookie = req.cookies.get('kazibox_session')?.value;
   if (!sessionCookie) {
     return null;
   }
+
   try {
     const decoded = JSON.parse(decodeURIComponent(sessionCookie));
     const { userId, companyId } = decoded as { userId?: string; companyId?: string };
     if (!userId || !companyId) {
       return null;
     }
-    // In demo mode we have no Supabase, so we cannot verify the role from a DB.
-    // Default to 'owner' here only because the local demo store always has
-    // a single owner user and Supabase is not present to verify anything anyway.
-    return { userId, companyId, role: 'owner', email: '', name: '' };
+
+    const store = getStore();
+    const user = store.users.find((u) => u.id === userId);
+    const activeCompanyId = targetCompanyId?.trim() || companyId;
+
+    // Check if user has membership in target company
+    if (user) {
+      if (user.role === 'platform_admin') {
+        return {
+          userId: user.id,
+          companyId: activeCompanyId,
+          role: 'platform_admin',
+          email: user.email,
+          name: user.name,
+        };
+      }
+
+      if (user.company_id === activeCompanyId) {
+        return {
+          userId: user.id,
+          companyId: activeCompanyId,
+          role: user.role,
+          email: user.email,
+          name: user.name,
+        };
+      }
+
+      const member = store.members.find(
+        (m) =>
+          (m.company_id === activeCompanyId) &&
+          (m.user_id === user.id || m.email === user.email) &&
+          m.status === 'active'
+      );
+
+      if (member) {
+        return {
+          userId: user.id,
+          companyId: activeCompanyId,
+          role: member.role,
+          email: user.email,
+          name: user.name,
+        };
+      }
+
+      // If target company specifically requested but user is not member
+      if (targetCompanyId && targetCompanyId !== user.company_id) {
+        return null;
+      }
+    }
+
+    return {
+      userId,
+      companyId: activeCompanyId,
+      role: (user?.role as ServerUserSession['role']) || 'owner',
+      email: user?.email || '',
+      name: user?.name || '',
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * Robust guard that enforces authentication, tenant isolation, role authorization,
+ * and module subscription entitlements in one unified call.
+ */
+export async function requireServerAuth(
+  req: NextRequest,
+  options?: {
+    targetCompanyId?: string | null;
+    requiredModuleId?: string;
+    allowedRoles?: ServerUserSession['role'][];
+    requireWriteAccess?: boolean;
+    minEntitlement?: ModuleEntitlement;
+  }
+): Promise<RequireAuthResult> {
+  const targetCompany = options?.targetCompanyId?.trim() || null;
+
+  // 1. Authenticate user and validate company membership
+  const session = await getServerSession(req, targetCompany);
+
+  if (!session) {
+    // Distinguish unauthenticated (no session at all) vs unauthorized for targetCompany
+    const unauthenticatedSession = await getServerSession(req);
+    if (!unauthenticatedSession) {
+      return {
+        errorResponse: NextResponse.json(
+          {
+            success: false,
+            error: 'Unauthorized',
+            code: 'NOT_AUTHENTICATED',
+            message: 'Veuillez vous connecter pour accéder à cette ressource.',
+          },
+          { status: 401 }
+        ),
+      };
+    }
+
+    // User is authenticated, but does not belong to the requested targetCompany
+    return {
+      errorResponse: NextResponse.json(
+        {
+          success: false,
+          error: 'Forbidden',
+          code: 'COMPANY_MISMATCH',
+          message: 'Vous n’avez pas accès à cet espace de travail.',
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  // 2. If targetCompanyId was supplied, ensure session is bound to it
+  if (targetCompany && session.companyId !== targetCompany && session.role !== 'platform_admin') {
+    return {
+      errorResponse: NextResponse.json(
+        {
+          success: false,
+          error: 'Forbidden',
+          code: 'COMPANY_MISMATCH',
+          message: 'Vous ne pouvez pas effectuer d’opérations sur un autre espace de travail.',
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  // 3. Enforce role permissions if specified
+  if (options?.allowedRoles && options.allowedRoles.length > 0) {
+    if (!options.allowedRoles.includes(session.role)) {
+      return {
+        errorResponse: NextResponse.json(
+          {
+            success: false,
+            error: 'Forbidden',
+            code: 'INSUFFICIENT_ROLE',
+            message: 'Permissions insuffisantes pour effectuer cette action.',
+          },
+          { status: 403 }
+        ),
+      };
+    }
+  }
+
+  // 4. Enforce module entitlement and read-only mode if specified
+  if (options?.requiredModuleId) {
+    const entitlement = await getModuleEntitlement(session.companyId, options.requiredModuleId);
+
+    if (entitlement === 'none') {
+      return {
+        errorResponse: NextResponse.json(
+          {
+            success: false,
+            error: 'Forbidden',
+            code: 'MODULE_NOT_ENTITLED',
+            message: `Le module '${options.requiredModuleId}' n’est pas activé ou inclus dans l’abonnement de cet espace de travail.`,
+          },
+          { status: 403 }
+        ),
+      };
+    }
+
+    const isWriteMethod = req.method !== 'GET' && req.method !== 'HEAD';
+    const writeRequired =
+      options?.requireWriteAccess ?? (options?.minEntitlement === 'active' || isWriteMethod);
+
+    if (entitlement === 'read_only' && writeRequired) {
+      return {
+        errorResponse: NextResponse.json(
+          {
+            success: false,
+            error: 'Forbidden',
+            code: 'SUBSCRIPTION_EXPIRED',
+            message: `L’abonnement pour le module '${options.requiredModuleId}' a expiré. L’accès est en lecture seule. Veuillez renouveler votre abonnement pour effectuer des modifications.`,
+          },
+          { status: 403 }
+        ),
+      };
+    }
+  }
+
+  return { session };
 }
 
 /**

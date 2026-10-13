@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from '@/lib/server-auth';
-import { recordSalonPayment, ensureUuidCompanyId } from '@/lib/salon';
-import { hasModuleAccess } from '@/lib/modules';
+import { requireServerAuth } from '@/lib/server-auth';
+import { recordSalonPayment } from '@/lib/salon';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
@@ -14,17 +12,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const { appointment_id, company_id: inputCompanyId, ...paymentData } = body;
-  const companyId = ensureUuidCompanyId(inputCompanyId || session?.companyId || '');
-
-  const hasAccess = await hasModuleAccess(companyId, 'salon-beauty');
-  if (!hasAccess) {
-    return NextResponse.json({ success: false, error: 'Module non activé pour cet établissement' }, { status: 403 });
-  }
-
+  const { appointment_id, ...paymentData } = body;
   if (!appointment_id) {
     return NextResponse.json({ success: false, error: 'appointment_id est obligatoire' }, { status: 422 });
   }
+
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'salon-beauty',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
 
   const res = await recordSalonPayment(companyId, appointment_id, paymentData);
   if (!res.success) {

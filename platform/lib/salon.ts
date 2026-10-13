@@ -111,7 +111,7 @@ export interface SalonReports {
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function ensureUuidCompanyId(id: string): string {
   if (id && UUID_REGEX.test(id)) return id;
-  return '11111111-1111-4111-8111-111111111111';
+  return id?.trim() || '';
 }
 
 function generateId(prefix: string): string {

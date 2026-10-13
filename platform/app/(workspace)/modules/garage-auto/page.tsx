@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Card, Button, Badge, Modal } from '@kazibox/ui';
 import { useTranslation, localize } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
-import { RequireAccess } from '@/app/(workspace)/components/RequireAccess';
+import { RequireAccess, useModuleAccess } from '@/app/(workspace)/components/RequireAccess';
 import {
   GarageCustomer,
   GarageVehicle,
@@ -39,6 +39,7 @@ export default function GarageModulePage() {
 function GarageModuleContent() {
   const { t, language } = useTranslation();
   const { user, workspace } = useSession();
+  const { isReadOnly } = useModuleAccess();
 
   const companyId = workspace?.company_id || workspace?.id || '22222222-2222-4222-8222-222222222222';
   const role = user?.role || 'worker';
@@ -207,6 +208,10 @@ function GarageModuleContent() {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newCustName.trim() || !newCustPhone.trim()) {
       showToast('error', 'Nom et téléphone obligatoires.');
       return;
@@ -234,6 +239,10 @@ function GarageModuleContent() {
 
   const handleCreateVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newVehReg.trim() || !newVehMake.trim() || !newVehModel.trim() || !newVehCustomerId) {
       showToast('error', 'Client, immatriculation, marque et modèle obligatoires.');
       return;
@@ -268,6 +277,10 @@ function GarageModuleContent() {
 
   const handleCreateJob = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newJobTitle.trim() || !newJobCustomerId || !newJobVehicleId) {
       showToast('error', 'Client, véhicule et motif de réparation obligatoires.');
       return;
@@ -301,6 +314,10 @@ function GarageModuleContent() {
   };
 
   const handleStatusChange = async (jobId: string, status: GarageJob['status']) => {
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     const res = await updateGarageJobStatus(companyId, jobId, status);
     if (res.success) {
       showToast('success', `Statut mis à jour vers "${status}" !`);
@@ -315,6 +332,10 @@ function GarageModuleContent() {
 
   const handleAddItemToJob = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!selectedJobForDetail) return;
     if (!newItemName.trim()) {
       showToast('error', 'Nom du service/pièce obligatoire.');
@@ -340,6 +361,10 @@ function GarageModuleContent() {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!selectedJobForDetail) return;
     const amt = parseFloat(paymentAmount);
     if (isNaN(amt) || amt <= 0) {
@@ -415,6 +440,8 @@ function GarageModuleContent() {
             <Button
               variant="outline"
               size="sm"
+              disabled={isReadOnly}
+              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
               onClick={() => setIsAddCustomerOpen(true)}
             >
               + Client
@@ -422,6 +449,8 @@ function GarageModuleContent() {
             <Button
               variant="outline"
               size="sm"
+              disabled={isReadOnly}
+              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
               onClick={() => {
                 if (customers.length > 0) setNewVehCustomerId(customers[0].id);
                 setIsAddVehicleOpen(true);
@@ -432,6 +461,8 @@ function GarageModuleContent() {
             <Button
               variant="primary"
               size="sm"
+              disabled={isReadOnly}
+              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
               className="bg-amber-600 hover:bg-amber-700 text-white"
               onClick={() => {
                 if (customers.length > 0) setNewJobCustomerId(customers[0].id);
@@ -1432,6 +1463,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'diagnosing')}
                 >
                   Diagnostic
@@ -1440,6 +1473,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-amber-800 bg-amber-50 border-amber-300"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'in_progress')}
                 >
                   Démarrer travaux
@@ -1448,6 +1483,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-red-800 bg-red-50 border-red-300"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'waiting_parts')}
                 >
                   Attente pièces
@@ -1456,6 +1493,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-green-800 bg-green-50 border-green-300 font-bold"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'completed')}
                 >
                   ✓ Marquer Terminé
@@ -1464,6 +1503,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'delivered')}
                 >
                   🚗 Livrer au client
@@ -1479,6 +1520,8 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-0.5 px-2"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => setIsAddItemModalOpen(true)}
                 >
                   + Ajouter ligne
@@ -1555,6 +1598,8 @@ function GarageModuleContent() {
                   <Button
                     variant="primary"
                     size="sm"
+                    disabled={isReadOnly}
+                    title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                     className="bg-green-600 hover:bg-green-700 text-white"
                     onClick={() => {
                       setPaymentAmount(String(selectedJobForDetail.outstanding_amount));

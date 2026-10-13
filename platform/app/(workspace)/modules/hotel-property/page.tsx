@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Card, Button, Badge, Modal, Input, Select } from '@kazibox/ui';
 import { useTranslation, localize } from '@/lib/i18n';
 import { useSession } from '@/lib/useSession';
-import { RequireAccess } from '../../components/RequireAccess';
+import { RequireAccess, useModuleAccess } from '../../components/RequireAccess';
 import {
   getRooms,
   createRoom,
@@ -24,8 +24,17 @@ import {
 } from '@/lib/hotel';
 
 export default function HotelModulePage() {
+  return (
+    <RequireAccess moduleId="hotel-property">
+      <HotelModuleContent />
+    </RequireAccess>
+  );
+}
+
+function HotelModuleContent() {
   const { t, language } = useTranslation();
   const { user, workspace } = useSession();
+  const { isReadOnly } = useModuleAccess();
 
   const companyId = workspace?.id || '11111111-1111-4111-8111-111111111111';
   const role = user?.role || 'worker';
@@ -130,6 +139,10 @@ export default function HotelModulePage() {
   // Handlers for creating Room
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newRoomNumber.trim()) {
       showToast('error', t('hotel.validation_room_required'));
       return;
@@ -157,6 +170,10 @@ export default function HotelModulePage() {
   // Handlers for creating Guest
   const handleCreateGuest = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newGuestName.trim()) {
       showToast('error', t('hotel.validation_guest_required'));
       return;
@@ -185,6 +202,10 @@ export default function HotelModulePage() {
   // Handlers for creating Reservation
   const handleCreateReservation = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!newResGuestId || !newResRoomId) {
       showToast('error', t('hotel.validation_guest_room_required'));
       return;
@@ -217,6 +238,10 @@ export default function HotelModulePage() {
 
   // Quick Room Status change
   const handleRoomStatusChange = async (roomId: string, newStatus: HotelRoom['status']) => {
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     const res = await updateRoomStatus(companyId, roomId, newStatus);
     if (res.success) {
       showToast('success', t(`hotel.room_status_${newStatus}`) || 'Statut mis à jour.');
@@ -228,6 +253,10 @@ export default function HotelModulePage() {
 
   // Execute Check-in
   const handleConfirmCheckIn = async () => {
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!selectedResForCheckIn) return;
     const payment = parseFloat(checkInPayment) || 0;
     const res = await checkInGuest(
@@ -249,6 +278,10 @@ export default function HotelModulePage() {
 
   // Execute Check-out
   const handleConfirmCheckOut = async () => {
+    if (isReadOnly) {
+      showToast('error', t('billing.read_only_action_disabled'));
+      return;
+    }
     if (!selectedResForCheckOut) return;
     const payment = parseFloat(checkOutPayment) || 0;
     const res = await checkOutGuest(
@@ -336,8 +369,7 @@ export default function HotelModulePage() {
   }
 
   return (
-    <RequireAccess moduleId="hotel-property">
-      <div className="space-y-6">
+    <div className="space-y-6">
         {/* Toast Alert */}
         {notification && (
           <div
@@ -392,6 +424,8 @@ export default function HotelModulePage() {
               <Button
                 variant="primary"
                 size="sm"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                 onClick={() => setIsAddResOpen(true)}
                 className="bg-[#6D28D9] hover:bg-[#5B21B6]"
               >
@@ -546,10 +580,22 @@ export default function HotelModulePage() {
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-[#1F2937]">{t('hotel.recent_stays')}</h3>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setIsAddRoomOpen(true)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isReadOnly}
+                    title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
+                    onClick={() => setIsAddRoomOpen(true)}
+                  >
                     ➕ {t('hotel.add_room_btn')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => setIsAddGuestOpen(true)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isReadOnly}
+                    title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
+                    onClick={() => setIsAddGuestOpen(true)}
+                  >
                     👤 {t('hotel.add_guest_btn')}
                   </Button>
                 </div>
@@ -590,6 +636,8 @@ export default function HotelModulePage() {
                             <Button
                               variant="primary"
                               size="sm"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => setSelectedResForCheckIn(res)}
                               className="bg-indigo-600 hover:bg-indigo-700"
                             >
@@ -600,6 +648,8 @@ export default function HotelModulePage() {
                             <Button
                               variant="outline"
                               size="sm"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => setSelectedResForCheckOut(res)}
                               className="border-emerald-600 text-emerald-700 hover:bg-emerald-50"
                             >
@@ -639,7 +689,14 @@ export default function HotelModulePage() {
                 ))}
               </div>
 
-              <Button variant="primary" size="sm" onClick={() => setIsAddRoomOpen(true)} className="bg-[#6D28D9]">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
+                onClick={() => setIsAddRoomOpen(true)}
+                className="bg-[#6D28D9]"
+              >
                 ➕ {t('hotel.add_room_btn')}
               </Button>
             </div>
@@ -678,8 +735,10 @@ export default function HotelModulePage() {
                     </label>
                     <select
                       value={room.status}
+                      disabled={isReadOnly}
+                      title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                       onChange={(e) => handleRoomStatusChange(room.id, e.target.value as any)}
-                      className="w-full text-xs font-semibold p-2 rounded-xl bg-[#F9FAFB] border border-[#E5E7EB] text-[#1F2937] focus:outline-none focus:ring-2 focus:ring-[#6D28D9]"
+                      className="w-full text-xs font-semibold p-2 rounded-xl bg-[#F9FAFB] border border-[#E5E7EB] text-[#1F2937] focus:outline-none focus:ring-2 focus:ring-[#6D28D9] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <option value="available">🟢 {t('hotel.room_status_available')}</option>
                       <option value="occupied">🔵 {t('hotel.room_status_occupied')}</option>
@@ -717,7 +776,14 @@ export default function HotelModulePage() {
                 ))}
               </div>
 
-              <Button variant="primary" size="sm" onClick={() => setIsAddResOpen(true)} className="bg-[#6D28D9]">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
+                onClick={() => setIsAddResOpen(true)}
+                className="bg-[#6D28D9]"
+              >
                 ➕ {t('hotel.new_reservation_btn')}
               </Button>
             </div>
@@ -768,6 +834,8 @@ export default function HotelModulePage() {
                             <Button
                               variant="primary"
                               size="sm"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => setSelectedResForCheckIn(res)}
                               className="bg-indigo-600 hover:bg-indigo-700"
                             >
@@ -778,6 +846,8 @@ export default function HotelModulePage() {
                             <Button
                               variant="outline"
                               size="sm"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => setSelectedResForCheckOut(res)}
                               className="border-emerald-600 text-emerald-700 hover:bg-emerald-50"
                             >
@@ -806,7 +876,14 @@ export default function HotelModulePage() {
                   onChange={(e) => setGuestSearch(e.target.value)}
                 />
               </div>
-              <Button variant="primary" size="sm" onClick={() => setIsAddGuestOpen(true)} className="bg-[#6D28D9]">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
+                onClick={() => setIsAddGuestOpen(true)}
+                className="bg-[#6D28D9]"
+              >
                 👤 {t('hotel.add_guest_btn')}
               </Button>
             </div>
@@ -1236,6 +1313,5 @@ export default function HotelModulePage() {
           </Modal>
         )}
       </div>
-    </RequireAccess>
-  );
+    );
 }

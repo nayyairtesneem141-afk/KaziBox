@@ -244,11 +244,61 @@ export async function switchWorkspace(companyId: string): Promise<boolean> {
   const session = await getSession();
   if (!session || typeof window === 'undefined') return false;
 
+  // Refresh user's role from destination company's membership record
+  let newRole = session.user.role;
+  if (isSupabaseConfigured()) {
+    const supabase: any = createBrowserClient();
+    if (supabase) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('company_id, role')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+      if (profile && profile.role === 'platform_admin') {
+        newRole = 'platform_admin';
+      } else if (profile && profile.company_id === target.company_id) {
+        newRole = profile.role;
+      } else {
+        const { data: member } = await supabase
+          .from('team_members')
+          .select('role')
+          .eq('company_id', target.company_id)
+          .or(`user_id.eq.${session.user.id},email.eq.${session.user.email}`)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        if (member?.role) {
+          newRole = member.role;
+        }
+      }
+    }
+  } else {
+    const store = getStore();
+    const user = store.users.find((u) => u.id === session.user.id);
+    if (user?.role === 'platform_admin') {
+      newRole = 'platform_admin';
+    } else if (user?.company_id === target.company_id) {
+      newRole = user.role;
+    } else {
+      const member = store.members.find(
+        (m) =>
+          (m.company_id === target.company_id || m.company_id === target.id) &&
+          (m.user_id === session.user.id || m.email === session.user.email) &&
+          m.status === 'active'
+      );
+      if (member?.role) {
+        newRole = member.role;
+      }
+    }
+  }
+
   session.workspace = target;
   session.user.company_id = target.company_id;
+  session.user.role = newRole;
   localStorage.setItem('kazibox_current_session', JSON.stringify(session));
   document.cookie = `kazibox_session=${encodeURIComponent(
-    JSON.stringify({ userId: session.user.id, companyId: target.company_id })
+    JSON.stringify({ userId: session.user.id, companyId: target.company_id, role: newRole })
   )}; path=/; max-age=604800; SameSite=Lax`;
 
   return true;

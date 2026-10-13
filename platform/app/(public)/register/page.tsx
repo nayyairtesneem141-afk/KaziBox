@@ -21,6 +21,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   const countryOptions = [
     { value: 'Côte d’Ivoire', label: 'Côte d’Ivoire' },
@@ -64,7 +65,7 @@ export default function RegisterPage() {
     setError('');
     setIsLoading(true);
 
-    const { error: signUpError } = await signUp({
+    const { data: signUpData, error: signUpError } = await signUp({
       name,
       email,
       phone,
@@ -78,6 +79,11 @@ export default function RegisterPage() {
 
     if (signUpError) {
       setError(signUpError.message);
+      return;
+    }
+
+    if (signUpData?.requiresConfirmation) {
+      setIsSubmitted(true);
       return;
     }
 
@@ -132,7 +138,24 @@ export default function RegisterPage() {
             </div>
           )}
 
-          <form onSubmit={handleRegister} className="space-y-4">
+          {isSubmitted ? (
+            <div className="space-y-5">
+              <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl text-purple-950 text-sm">
+                <h3 className="font-bold text-base mb-1 text-[var(--kazibox-primary,#6D28D9)]">
+                  {t('auth.confirmation_sent_title')}
+                </h3>
+                <p className="text-[#4B5563]">
+                  {t('auth.confirmation_sent_message')}
+                </p>
+              </div>
+              <Link href="/login" className="block">
+                <Button variant="primary" fullWidth size="lg">
+                  {t('auth.login_button')}
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
             <Input
               label={t('auth.name_label')}
               required
@@ -206,6 +229,7 @@ export default function RegisterPage() {
               </Button>
             </div>
           </form>
+          )}
 
           <div className="mt-6 pt-6 border-t border-[#E5E7EB] text-center">
             <p className="text-sm text-[#6B7280]">

@@ -1068,11 +1068,12 @@ const STORAGE_KEYS = {
   PAYMENTS: 'kazibox_db_payments',
   API_KEYS: 'kazibox_db_api_keys',
   FINANCE: 'kazibox_db_finance_records',
+  DIRECTORY_ENTRIES: 'kazibox_db_directory_entries',
   CURRENT_SESSION: 'kazibox_current_session',
 };
 
 // Storage versioning to invalidate stale localStorage data across releases
-const STORE_VERSION = 'v3.3.0';
+const STORE_VERSION = 'v3.4.0';
 const STORE_VERSION_KEY = 'kazibox_db_schema_version';
 
 export const getStore = () => {
@@ -1086,6 +1087,7 @@ export const getStore = () => {
       subscriptions: [...INITIAL_SUBSCRIPTIONS],
       payments: [...INITIAL_PAYMENTS],
       apiKeys: [...INITIAL_API_KEYS],
+      directoryEntries: [],
     };
   }
 
@@ -1139,6 +1141,7 @@ export const getStore = () => {
     subscriptions: getOrSet(STORAGE_KEYS.SUBSCRIPTIONS, INITIAL_SUBSCRIPTIONS),
     payments: getOrSet(STORAGE_KEYS.PAYMENTS, INITIAL_PAYMENTS),
     apiKeys: getOrSet(STORAGE_KEYS.API_KEYS, INITIAL_API_KEYS),
+    directoryEntries: getOrSet(STORAGE_KEYS.DIRECTORY_ENTRIES, []),
   };
 };
 

@@ -108,6 +108,17 @@ export const Sidebar: React.FC = () => {
       visible: isOwner,
     },
     {
+      // Business Directory: Accessible across workspaces
+      label: t('nav.directory') || 'Annuaire Entreprises',
+      href: '/directory',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+        </svg>
+      ),
+      visible: !isWorker,
+    },
+    {
       // Settings: hidden for workers, visible for owners and managers
       label: t('nav.settings'),
       href: '/settings',
@@ -322,6 +333,20 @@ export const Sidebar: React.FC = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
                 <span>{t('webhooks.admin_nav') || 'Webhooks'}</span>
+              </Link>
+
+              <Link
+                href="/admin/directory"
+                className={`flex items-center gap-3.5 px-4 py-3 rounded-xl font-bold text-sm min-h-[46px] transition-all ${
+                  pathname.startsWith('/admin/directory')
+                    ? 'bg-purple-100 text-purple-900 shadow-sm'
+                    : 'text-[#4B5563] hover:text-[#1F2937] hover:bg-[#F9FAFB]'
+                }`}
+              >
+                <svg className="w-5 h-5 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                <span>{t('nav.admin_directory') || 'Modération Annuaire'}</span>
               </Link>
             </div>
           </div>

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Button, Badge, Modal } from '@kazibox/ui';
-import { RequireAccess } from '@/app/(workspace)/components/RequireAccess';
+import { RequireAccess, useModuleAccess } from '@/app/(workspace)/components/RequireAccess';
 import { useSession } from '@/lib/useSession';
 import { useTranslation } from '@/lib/i18n';
 import {
@@ -28,8 +28,17 @@ import {
 } from '@/lib/salon';
 
 export default function HairSalonPage() {
+  return (
+    <RequireAccess moduleId="hair-salon">
+      <HairSalonContent />
+    </RequireAccess>
+  );
+}
+
+function HairSalonContent() {
   const { workspace, user } = useSession();
   const { t, language } = useTranslation();
+  const { isReadOnly } = useModuleAccess();
   const companyId = workspace?.company_id || '11111111-1111-4111-8111-111111111111';
 
   // Active Tab
@@ -196,6 +205,10 @@ export default function HairSalonPage() {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     if (!newCustName || !newCustPhone) {
       showToast(t('salon.error_required_fields'), 'error');
       return;
@@ -222,6 +235,10 @@ export default function HairSalonPage() {
 
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     if (!newStaffName) {
       showToast(t('salon.error_required_fields'), 'error');
       return;
@@ -246,6 +263,10 @@ export default function HairSalonPage() {
 
   const handleCreateService = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     if (!newSrvName || newSrvDuration <= 0 || newSrvPrice < 0) {
       showToast(t('salon.error_required_fields'), 'error');
       return;
@@ -269,6 +290,10 @@ export default function HairSalonPage() {
 
   const handleCreateAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     if (!newAptCustomerId || !newAptStaffId || !newAptServiceId || !newAptDate || !newAptStartTime) {
       showToast(t('salon.error_required_fields'), 'error');
       return;
@@ -295,6 +320,10 @@ export default function HairSalonPage() {
   };
 
   const handleStatusChange = async (appointmentId: string, newStatus: SalonAppointment['status']) => {
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     const res = await updateSalonAppointmentStatus(companyId, appointmentId, newStatus);
     if (res.success) {
       showToast(t('salon.toast_status_updated'));
@@ -305,6 +334,10 @@ export default function HairSalonPage() {
   };
 
   const openPaymentModal = (apt: SalonAppointment) => {
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     setSelectedAppointmentForPayment(apt);
     const paid = (apt.payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
     const remaining = Math.max(0, apt.price - paid);
@@ -314,6 +347,10 @@ export default function HairSalonPage() {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      showToast(t('billing.read_only_action_disabled'), 'error');
+      return;
+    }
     if (!selectedAppointmentForPayment || paymentAmount <= 0) return;
 
     const res = await recordSalonPayment(companyId, selectedAppointmentForPayment.id, {
@@ -349,8 +386,7 @@ export default function HairSalonPage() {
   }, [appointments, searchTerm, dateFilter, staffFilter, statusFilter]);
 
   return (
-    <RequireAccess moduleId="hair-salon">
-      <div className="min-h-screen bg-[#F9FAFB] pb-24 text-[#1F2937]">
+    <div className="min-h-screen bg-[#F9FAFB] pb-24 text-[#1F2937]">
         {/* Toast Alert */}
         {toastMessage && (
           <div
@@ -390,6 +426,8 @@ export default function HairSalonPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <Button
                 variant="primary"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                 onClick={() => setIsAppointmentModalOpen(true)}
                 className="bg-gradient-to-r from-pink-600 to-rose-500 hover:from-pink-700 hover:to-rose-600 text-white shadow-md shadow-pink-500/25 font-bold cursor-pointer"
               >
@@ -397,6 +435,8 @@ export default function HairSalonPage() {
               </Button>
               <Button
                 variant="outline"
+                disabled={isReadOnly}
+                title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                 onClick={() => setIsCustomerModalOpen(true)}
                 className="cursor-pointer"
               >
@@ -543,6 +583,8 @@ export default function HairSalonPage() {
                             <Button
                               size="sm"
                               variant="outline"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => handleStatusChange(apt.id, 'in_progress')}
                               className="text-xs cursor-pointer"
                             >
@@ -553,6 +595,8 @@ export default function HairSalonPage() {
                             <Button
                               size="sm"
                               variant="primary"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => handleStatusChange(apt.id, 'completed')}
                               className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
                             >
@@ -563,6 +607,8 @@ export default function HairSalonPage() {
                             <Button
                               size="sm"
                               variant="primary"
+                              disabled={isReadOnly}
+                              title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                               onClick={() => openPaymentModal(apt)}
                               className="text-xs bg-pink-600 hover:bg-pink-700 text-white cursor-pointer"
                             >
@@ -725,6 +771,8 @@ export default function HairSalonPage() {
                           <Button
                             size="sm"
                             variant="outline"
+                            disabled={isReadOnly}
+                            title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                             onClick={() => handleStatusChange(apt.id, 'confirmed')}
                             className="text-xs cursor-pointer"
                           >
@@ -733,6 +781,8 @@ export default function HairSalonPage() {
                           <Button
                             size="sm"
                             variant="primary"
+                            disabled={isReadOnly}
+                            title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                             onClick={() => handleStatusChange(apt.id, 'in_progress')}
                             className="text-xs bg-yellow-500 hover:bg-yellow-600 text-white cursor-pointer"
                           >
@@ -741,6 +791,8 @@ export default function HairSalonPage() {
                           <Button
                             size="sm"
                             variant="outline"
+                            disabled={isReadOnly}
+                            title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                             onClick={() => handleStatusChange(apt.id, 'cancelled')}
                             className="text-xs text-red-600 border-red-200 cursor-pointer"
                           >
@@ -753,6 +805,8 @@ export default function HairSalonPage() {
                         <Button
                           size="sm"
                           variant="primary"
+                          disabled={isReadOnly}
+                          title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                           onClick={() => handleStatusChange(apt.id, 'in_progress')}
                           className="text-xs bg-yellow-500 hover:bg-yellow-600 text-white cursor-pointer"
                         >
@@ -764,6 +818,8 @@ export default function HairSalonPage() {
                         <Button
                           size="sm"
                           variant="primary"
+                          disabled={isReadOnly}
+                          title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                           onClick={() => handleStatusChange(apt.id, 'completed')}
                           className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
                         >
@@ -775,6 +831,8 @@ export default function HairSalonPage() {
                         <Button
                           size="sm"
                           variant="primary"
+                          disabled={isReadOnly}
+                          title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                           onClick={() => openPaymentModal(apt)}
                           className="text-xs bg-pink-600 hover:bg-pink-700 text-white cursor-pointer"
                         >
@@ -815,6 +873,8 @@ export default function HairSalonPage() {
                 />
                 <Button
                   variant="primary"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => setIsCustomerModalOpen(true)}
                   className="bg-pink-600 hover:bg-pink-700 text-white cursor-pointer text-sm font-bold"
                 >
@@ -869,6 +929,8 @@ export default function HairSalonPage() {
                 <h3 className="font-bold text-lg text-[#1F2937]">Prestations & Tarifs Salon</h3>
                 <Button
                   variant="primary"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => setIsServiceModalOpen(true)}
                   className="bg-pink-600 hover:bg-pink-700 text-white cursor-pointer text-sm font-bold"
                 >
@@ -907,6 +969,8 @@ export default function HairSalonPage() {
                 <h3 className="font-bold text-lg text-[#1F2937]">Équipe & Stylistes</h3>
                 <Button
                   variant="primary"
+                  disabled={isReadOnly}
+                  title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => setIsStaffModalOpen(true)}
                   className="bg-pink-600 hover:bg-pink-700 text-white cursor-pointer text-sm font-bold"
                 >
@@ -1500,6 +1564,5 @@ export default function HairSalonPage() {
           )}
         </Modal>
       </div>
-    </RequireAccess>
-  );
+    );
 }

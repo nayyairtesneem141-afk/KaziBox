@@ -145,65 +145,251 @@ export async function getModule(slugOrId: string): Promise<ModuleManifest | null
   return baseFound || null;
 }
 
+export type ModuleEntitlement = 'active' | 'read_only' | 'none';
+
 /**
- * Check if the workspace has active subscription access to a given module
+ * Returns the exact entitlement tier for a workspace and module:
+ * - 'active': Fully entitled. Reads and permitted writes allowed.
+ * - 'read_only': Subscription expired, cancelled, or inactive. Historical data and reports readable, writes prohibited.
+ * - 'none': Workspace never subscribed and has no entitlement to this module.
  */
-export async function hasModuleAccess(companyId: string, moduleId: string): Promise<boolean> {
+export async function getModuleEntitlement(
+  companyId: string,
+  moduleId: string
+): Promise<ModuleEntitlement> {
   const mod = await getModule(moduleId);
-  // Free tools are accessible to all workspaces without a paid subscription
+  // Free tools are always active for all workspaces
   if (mod?.pricing_type === 'free') {
-    return true;
+    return 'active';
   }
 
   const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
   const isGarage = ['garage', 'garage-auto'].includes(moduleId);
+  const isHotel = ['hotel', 'hotel-property'].includes(moduleId);
+  const isDemo = ['demo', 'demo-module'].includes(moduleId);
 
-  // 1. Check if module status is explicitly set in company_modules table
+  const targetIds = isSalon
+    ? ['hair-salon', 'salon', 'salon-beauty']
+    : isGarage
+    ? ['garage', 'garage-auto']
+    : isHotel
+    ? ['hotel', 'hotel-property']
+    : [moduleId, mod?.slug || moduleId];
+
+  // 1. Supabase check
   if (isSupabaseConfigured()) {
-    const supabase: any = typeof window !== 'undefined'
-      ? createBrowserClient()
-      : (createAdminClient() || createServerClient());
+    const supabase: any =
+      typeof window !== 'undefined'
+        ? createBrowserClient()
+        : (createAdminClient() || createServerClient());
 
     if (supabase) {
       const filterStr = isSalon
         ? 'module_id.eq.hair-salon,module_id.eq.salon,module_id.eq.salon-beauty'
         : isGarage
         ? 'module_id.eq.garage,module_id.eq.garage-auto'
+        : isHotel
+        ? 'module_id.eq.hotel,module_id.eq.hotel-property'
         : `module_id.eq.${moduleId},module_id.eq.${mod?.slug || moduleId}`;
 
+      // Check company_modules table
       const { data: compMods } = await supabase
         .from('company_modules')
-        .select('status')
+        .select('status, expires_at')
         .eq('company_id', companyId)
         .or(filterStr);
 
       if (compMods && compMods.length > 0) {
-        if (compMods.some((m: any) => m.status === 'active')) {
-          return true;
+        const activeMod = compMods.find((m: any) => m.status === 'active');
+        if (activeMod) {
+          if (activeMod.expires_at && new Date(activeMod.expires_at) <= new Date()) {
+            return 'read_only';
+          }
+
+          // Double-check with workspace subscriptions table
+          const { data: latestSub } = await supabase
+            .from('subscriptions')
+            .select('status, current_period_end')
+            .eq('company_id', companyId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (latestSub) {
+            const isSubExpired = latestSub.current_period_end && new Date(latestSub.current_period_end) <= new Date();
+            const isSubInactive = latestSub.status !== 'active' && latestSub.status !== 'trial';
+            if (isSubExpired || isSubInactive) {
+              return 'read_only';
+            }
+          }
+
+          return 'active';
         }
-        if (compMods.some((m: any) => m.status === 'cancelled' || m.status === 'inactive')) {
-          return false;
+
+        if (compMods.some((m: any) => ['cancelled', 'suspended', 'expired', 'inactive'].includes(m.status))) {
+          return 'read_only';
+        }
+      }
+
+      // Check workspace subscriptions table
+      const { data: subData } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (subData && subData.length > 0) {
+        const latestSub = subData[0];
+        const isIncludedInLatest =
+          latestSub.plan_id === 'all_access' ||
+          (Array.isArray(latestSub.included_module_ids) &&
+            targetIds.some((id: string) => latestSub.included_module_ids.includes(id)));
+
+        if (isIncludedInLatest) {
+          const isStatusActive = latestSub.status === 'active' || latestSub.status === 'trial';
+          const isTimeExpired = latestSub.current_period_end && new Date(latestSub.current_period_end) <= new Date();
+
+          if (isStatusActive && !isTimeExpired) {
+            return 'active';
+          }
+          return 'read_only';
+        }
+
+        // Check if an older subscription included this module
+        const hadOlderSubscription = subData.some((s: any) =>
+          s.plan_id === 'all_access' ||
+          (Array.isArray(s.included_module_ids) &&
+            targetIds.some((id: string) => s.included_module_ids.includes(id)))
+        );
+        if (hadOlderSubscription) {
+          return 'read_only';
         }
       }
     }
   }
 
-  // 2. Check workspace subscription
-  const sub = await getSubscription(companyId);
-  if (!sub) return false;
-  if (sub.status !== 'active' && sub.status !== 'expiring_soon') return false;
+  // 2. Local storage / in-memory store check (offline & demo mode)
+  const store = getStore();
+  const sub = store.subscriptions.find((s) => s.companyId === companyId);
 
-  if (sub.planId === 'all_access') {
+  if (sub) {
+    const isIncluded =
+      sub.planId === 'all_access' ||
+      targetIds.some((id) => sub.includedModuleIds.includes(id));
+
+    if (isIncluded) {
+      const isStatusActive = sub.status === 'active' || sub.status === 'expiring_soon';
+      const isTimeExpired = sub.currentPeriodEnd && new Date(sub.currentPeriodEnd) <= new Date();
+
+      if (isStatusActive && !isTimeExpired) {
+        return 'active';
+      }
+      return 'read_only';
+    }
+  }
+
+  // 3. Check historical records in local store
+  try {
+    if (isGarage) {
+      const hasGarageRecords =
+        (store as any).garage_jobs?.some((j: any) => j.company_id === companyId) ||
+        (store as any).garage_vehicles?.some((v: any) => v.company_id === companyId);
+      if (hasGarageRecords) return 'read_only';
+    } else if (isSalon) {
+      const hasSalonRecords =
+        (store as any).salon_appointments?.some((a: any) => a.company_id === companyId) ||
+        (store as any).salon_customers?.some((c: any) => c.company_id === companyId);
+      if (hasSalonRecords) return 'read_only';
+    } else if (isHotel) {
+      const hasHotelRecords =
+        (store as any).hotel_rooms?.some((r: any) => r.company_id === companyId) ||
+        (store as any).hotel_reservations?.some((res: any) => res.company_id === companyId);
+      if (hasHotelRecords) return 'read_only';
+    }
+  } catch {
+    // Ignore error
+  }
+
+  return 'none';
+}
+
+/**
+ * Check if the workspace has active subscription access to a given module
+ */
+export async function hasModuleAccess(companyId: string, moduleId: string): Promise<boolean> {
+  const entitlement = await getModuleEntitlement(companyId, moduleId);
+  return entitlement === 'active';
+}
+
+/**
+ * Check if the workspace has at least read-only access (active or historical read-only)
+ */
+export async function hasModuleReadAccess(companyId: string, moduleId: string): Promise<boolean> {
+  const entitlement = await getModuleEntitlement(companyId, moduleId);
+  return entitlement === 'active' || entitlement === 'read_only';
+}
+
+/**
+ * Checks whether a company has a valid active subscription that covers the given module.
+ * Used to guard against activating paid modules without payment.
+ */
+export async function isModuleCoveredBySubscription(
+  companyId: string,
+  moduleId: string
+): Promise<boolean> {
+  const mod = await getModule(moduleId);
+  if (mod?.pricing_type === 'free') {
     return true;
   }
 
-  // Verify that the module is currently included in the active subscription
-  const isIncluded = sub.includedModuleIds.includes(moduleId) || 
-    (mod?.slug && sub.includedModuleIds.includes(mod.slug)) ||
-    (isGarage && (sub.includedModuleIds.includes('garage') || sub.includedModuleIds.includes('garage-auto'))) ||
-    (isSalon && (sub.includedModuleIds.includes('hair-salon') || sub.includedModuleIds.includes('salon') || sub.includedModuleIds.includes('salon-beauty')));
+  const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
+  const isGarage = ['garage', 'garage-auto'].includes(moduleId);
+  const targetIds = isSalon
+    ? ['hair-salon', 'salon', 'salon-beauty']
+    : isGarage
+    ? ['garage', 'garage-auto']
+    : [moduleId, mod?.slug || moduleId];
 
-  return isIncluded;
+  if (isSupabaseConfigured()) {
+    const supabase: any =
+      typeof window !== 'undefined'
+        ? createBrowserClient()
+        : (createAdminClient() || createServerClient());
+
+    if (supabase) {
+      const { data: subData } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (subData && subData.length > 0) {
+        return subData.some((s: any) => {
+          const isStatusActive = s.status === 'active' || s.status === 'trial';
+          const isTimeExpired = s.current_period_end && new Date(s.current_period_end) <= new Date();
+          const isIncluded =
+            s.plan_id === 'all_access' ||
+            (Array.isArray(s.included_module_ids) &&
+              targetIds.some((id: string) => s.included_module_ids.includes(id)));
+          return isStatusActive && !isTimeExpired && isIncluded;
+        });
+      }
+      return false;
+    }
+  }
+
+  const store = getStore();
+  const sub = store.subscriptions.find((s) => s.companyId === companyId);
+  if (!sub) return false;
+
+  const isIncluded =
+    sub.planId === 'all_access' ||
+    targetIds.some((id) => sub.includedModuleIds.includes(id));
+
+  const isStatusActive = sub.status === 'active' || sub.status === 'expiring_soon';
+  const isTimeExpired = sub.currentPeriodEnd && new Date(sub.currentPeriodEnd) <= new Date();
+
+  return isIncluded && isStatusActive && !isTimeExpired;
 }
 
 /**
@@ -215,6 +401,14 @@ export async function activateModule(
 ): Promise<{ success: boolean; message?: string }> {
   const mod = await getModule(moduleId);
   const isFree = mod?.pricing_type === 'free';
+
+  // Server-side check: Paid modules must be covered by active subscription
+  if (!isFree) {
+    const isCovered = await isModuleCoveredBySubscription(companyId, moduleId);
+    if (!isCovered) {
+      return { success: false, message: 'Un abonnement actif incluant ce module est requis.' };
+    }
+  }
 
   // In the browser, invoke the server API route using service role
   if (typeof window !== 'undefined') {
@@ -239,6 +433,7 @@ export async function activateModule(
         }
         return { success: true };
       }
+      return { success: false, message: json.error || 'Erreur lors de l’activation.' };
     } catch {
       // Fall through
     }

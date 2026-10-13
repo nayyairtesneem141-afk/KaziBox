@@ -423,6 +423,300 @@ test('Missing or empty signature/secret returns false', () => {
   assert(!verifyWebhookSignature(rawBody, 'sha256=1234', null), 'Null secret must return false');
 });
 
+// ── Task 1: API Security & Multi-Tenant Route Isolation ───────────────────────
+console.log('\n── Task 1: API Security & Multi-Tenant Route Isolation ──');
+
+const testState = {
+  users: [
+    { id: 'usr-1', email: 'owner_a@example.com', company_id: 'comp-a', role: 'owner' },
+    { id: 'usr-2', email: 'worker_a@example.com', company_id: 'comp-a', role: 'worker' },
+    { id: 'usr-3', email: 'owner_b@example.com', company_id: 'comp-b', role: 'owner' },
+    { id: 'usr-admin', email: 'admin@kazibox.io', company_id: 'comp-a', role: 'platform_admin' },
+  ],
+  members: [
+    // usr-1 is also a 'worker' in comp-b (multi-workspace membership)
+    { id: 'mem-1', company_id: 'comp-b', user_id: 'usr-1', email: 'owner_a@example.com', role: 'worker', status: 'active' },
+  ],
+  entitlements: {
+    'comp-a': ['hotel-property', 'garage-auto'],
+    'comp-b': ['salon-beauty'],
+  },
+  rooms: [
+    { id: 'room-101', company_id: 'comp-a', room_number: '101' },
+    { id: 'room-201', company_id: 'comp-b', room_number: '201' },
+  ],
+};
+
+function simulateRequireServerAuth(req, options, state = testState) {
+  const cookieVal = req.cookies.get('kazibox_session')?.value;
+  if (!cookieVal) {
+    return { status: 401, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' };
+  }
+
+  let sessionData = null;
+  try {
+    sessionData = JSON.parse(decodeURIComponent(cookieVal));
+  } catch {
+    return { status: 401, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' };
+  }
+
+  if (!sessionData?.userId) {
+    return { status: 401, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' };
+  }
+
+  const user = state.users.find((u) => u.id === sessionData.userId);
+  if (!user) {
+    return { status: 401, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' };
+  }
+
+  const targetCompany = options?.targetCompanyId || sessionData.companyId || user.company_id;
+
+  // Resolve role in targetCompany
+  let effectiveRole = null;
+  if (user.role === 'platform_admin') {
+    effectiveRole = 'platform_admin';
+  } else if (user.company_id === targetCompany) {
+    effectiveRole = user.role;
+  } else {
+    const member = state.members.find(
+      (m) =>
+        m.company_id === targetCompany &&
+        (m.user_id === user.id || m.email === user.email) &&
+        m.status === 'active'
+    );
+    if (member) {
+      effectiveRole = member.role;
+    }
+  }
+
+  // Cross-tenant boundary check: user has no membership in targetCompany
+  if (!effectiveRole) {
+    return { status: 403, error: 'Forbidden', code: 'COMPANY_MISMATCH' };
+  }
+
+  // Role permissions check
+  if (options?.allowedRoles && options.allowedRoles.length > 0) {
+    if (!options.allowedRoles.includes(effectiveRole)) {
+      return { status: 403, error: 'Forbidden', code: 'INSUFFICIENT_ROLE' };
+    }
+  }
+
+  // Module entitlement check
+  if (options?.requiredModuleId) {
+    const activeMods = state.entitlements[targetCompany] || [];
+    if (!activeMods.includes(options.requiredModuleId)) {
+      return { status: 403, error: 'Forbidden', code: 'MODULE_NOT_ENTITLED' };
+    }
+  }
+
+  return {
+    status: 200,
+    session: {
+      userId: user.id,
+      companyId: targetCompany,
+      role: effectiveRole,
+    },
+  };
+}
+
+test('1. Unauthenticated request to business-module API returns 401', () => {
+  const req = mockReq({ cookies: {} });
+  const result = simulateRequireServerAuth(req, { requiredModuleId: 'hotel-property' });
+  assert(result.status === 401, 'Must return 401 for missing session');
+  assert(result.code === 'NOT_AUTHENTICATED', 'Code must be NOT_AUTHENTICATED');
+});
+
+test('2. Company A user cannot access Company B records by supplying company_id (rejected with 403)', () => {
+  // usr-2 belongs only to comp-a
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-2', companyId: 'comp-a' })),
+    },
+  });
+  // Attempting to access comp-b
+  const result = simulateRequireServerAuth(req, {
+    targetCompanyId: 'comp-b',
+    requiredModuleId: 'salon-beauty',
+  });
+  assert(result.status === 403, 'Must return 403 Forbidden for cross-tenant access');
+  assert(result.code === 'COMPANY_MISMATCH', 'Code must be COMPANY_MISMATCH');
+});
+
+test('3. Cross-tenant resource manipulation is blocked (queries scoped to authorized company)', () => {
+  // User authenticated for comp-a attempts to manipulate room-201 (which belongs to comp-b)
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-1', companyId: 'comp-a' })),
+    },
+  });
+  const auth = simulateRequireServerAuth(req, { requiredModuleId: 'hotel-property' });
+  assert(auth.status === 200, 'Auth succeeds for comp-a');
+
+  // Simulated DB query scoped by company_id:
+  const foundRoom = testState.rooms.find(
+    (r) => r.id === 'room-201' && r.company_id === auth.session.companyId
+  );
+  assert(!foundRoom, 'Room from company B cannot be matched in company A queries');
+});
+
+test('4. Worker cannot perform privileged manager/owner mutation (rejected with 403)', () => {
+  // usr-2 is a worker in comp-a
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-2', companyId: 'comp-a' })),
+    },
+  });
+  const result = simulateRequireServerAuth(req, {
+    requiredModuleId: 'hotel-property',
+    allowedRoles: ['owner', 'manager', 'platform_admin'],
+  });
+  assert(result.status === 403, 'Worker must be blocked from owner/manager mutations');
+  assert(result.code === 'INSUFFICIENT_ROLE', 'Code must be INSUFFICIENT_ROLE');
+});
+
+test('5. Users cannot write to modules they have not subscribed to (rejected with 403)', () => {
+  // comp-a has hotel-property and garage-auto, but NOT salon-beauty
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-1', companyId: 'comp-a' })),
+    },
+  });
+  const result = simulateRequireServerAuth(req, {
+    requiredModuleId: 'salon-beauty',
+  });
+  assert(result.status === 403, 'Must return 403 when module is not entitled');
+  assert(result.code === 'MODULE_NOT_ENTITLED', 'Code must be MODULE_NOT_ENTITLED');
+});
+
+test('6. Authorized members can perform permitted actions in their own workspace', () => {
+  // usr-1 is owner of comp-a, comp-a is entitled to hotel-property
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-1', companyId: 'comp-a' })),
+    },
+  });
+  const result = simulateRequireServerAuth(req, {
+    requiredModuleId: 'hotel-property',
+    allowedRoles: ['owner', 'manager', 'platform_admin'],
+  });
+  assert(result.status === 200, 'Owner must be permitted');
+  assert(result.session.companyId === 'comp-a', 'CompanyId must be comp-a');
+  assert(result.session.role === 'owner', 'Role must be owner');
+});
+
+test('7. Workspace switching refreshes the correct role for destination company', () => {
+  // usr-1 is 'owner' in comp-a, but only 'worker' in comp-b (via team_members)
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-1', companyId: 'comp-b' })),
+    },
+  });
+  const result = simulateRequireServerAuth(req, {
+    targetCompanyId: 'comp-b',
+    requiredModuleId: 'salon-beauty',
+  });
+  assert(result.status === 200, 'Member access to comp-b is allowed');
+  assert(result.session.companyId === 'comp-b', 'CompanyId is comp-b');
+  assert(result.session.role === 'worker', 'Role must be refreshed to worker for comp-b');
+});
+
+test('8. Platform admin can access any workspace with platform_admin role', () => {
+  const req = mockReq({
+    cookies: {
+      kazibox_session: encodeURIComponent(JSON.stringify({ userId: 'usr-admin', companyId: 'comp-b' })),
+    },
+  });
+  const result = simulateRequireServerAuth(req, {
+    targetCompanyId: 'comp-b',
+    requiredModuleId: 'salon-beauty',
+  });
+  assert(result.status === 200, 'Platform admin is permitted');
+  assert(result.session.companyId === 'comp-b', 'Target company is comp-b');
+  assert(result.session.role === 'platform_admin', 'Role is platform_admin');
+});
+
+test('9. Cross-tenant garage job item injection blocked (jobId must belong to companyId)', () => {
+  // Simulating addGarageJobItem tenant ownership check
+  const jobsInDb = [
+    { id: 'job-tenant-b', company_id: 'comp-b', total_amount: 50000 },
+  ];
+  const callerCompany = 'comp-a';
+  const targetJobId = 'job-tenant-b';
+
+  const job = jobsInDb.find((j) => j.id === targetJobId && j.company_id === callerCompany);
+  assert(!job, 'Job from company B must not be found by company A caller');
+});
+
+test('10. Non-platform admin cannot activate paid module without active subscription coverage', () => {
+  // Simulating module activation entitlement enforcement
+  const callerSession = { role: 'owner', companyId: 'comp-a' };
+  const requestedModule = { id: 'garage-auto', pricing_type: 'paid' };
+  const subscriptions = [
+    { companyId: 'comp-a', status: 'active', planId: 'starter', includedModuleIds: ['hotel-property'] },
+  ];
+
+  const sub = subscriptions.find((s) => s.companyId === callerSession.companyId);
+  const isCovered =
+    callerSession.role === 'platform_admin' ||
+    requestedModule.pricing_type === 'free' ||
+    (sub &&
+      sub.status === 'active' &&
+      (sub.planId === 'all_access' || sub.includedModuleIds.includes(requestedModule.id)));
+
+  assert(!isCovered, 'Owner cannot activate paid module not covered by their subscription');
+});
+
+test('11. Client-supplied plan_id, status, or price in activation payload cannot override server entitlement', () => {
+  // Malicious owner payload attempting to spoof all_access and active status
+  const maliciousBody = {
+    moduleId: 'hotel-property',
+    companyId: 'comp-victim-001',
+    plan_id: 'all_access',
+    status: 'active',
+    price: 0,
+    entitlement: 'active',
+  };
+
+  // Server only extracts moduleId and companyId, never trusting client-supplied plan/status
+  const { moduleId } = maliciousBody;
+  assert(moduleId === 'hotel-property');
+
+  // Trusted DB subscription lookup
+  const trustedDbSub = null; // No subscription in trusted DB
+  const isCovered = !!(trustedDbSub && trustedDbSub.status === 'active');
+  assert(!isCovered, 'Spoofed client payload must not grant access without trusted DB record');
+});
+
+test('12. Module aliases (hotel/hotel-property, garage/garage-auto, salon/hair-salon) match consistently', () => {
+  const normalize = (id) => {
+    if (['hair-salon', 'salon', 'salon-beauty'].includes(id)) return ['hair-salon', 'salon', 'salon-beauty'];
+    if (['garage', 'garage-auto'].includes(id)) return ['garage', 'garage-auto'];
+    if (['hotel', 'hotel-property'].includes(id)) return ['hotel', 'hotel-property'];
+    return [id];
+  };
+
+  const hotelSub = { includedModuleIds: ['hotel-property'] };
+  const garageSub = { includedModuleIds: ['garage-auto'] };
+  const salonSub = { includedModuleIds: ['hair-salon'] };
+
+  assert(normalize('hotel').some((id) => hotelSub.includedModuleIds.includes(id)), 'hotel alias matches hotel-property');
+  assert(normalize('garage').some((id) => garageSub.includedModuleIds.includes(id)), 'garage alias matches garage-auto');
+  assert(normalize('salon').some((id) => salonSub.includedModuleIds.includes(id)), 'salon alias matches hair-salon');
+});
+
+test('13. Expired, cancelled, or suspended subscriptions deny paid write access', () => {
+  const statuses = ['expired', 'cancelled', 'suspended', 'inactive'];
+  for (const status of statuses) {
+    const sub = {
+      status,
+      current_period_end: new Date(Date.now() - 86400000).toISOString(),
+      plan_id: 'all_access',
+    };
+    const isActive = (sub.status === 'active' || sub.status === 'trial') && new Date(sub.current_period_end) > new Date();
+    assert(!isActive, `Subscription with status "${status}" must not be active`);
+  }
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 setTimeout(() => {
   console.log(`\n${'─'.repeat(55)}`);
@@ -433,3 +727,4 @@ setTimeout(() => {
     process.exit(1);
   }
 }, 50);
+

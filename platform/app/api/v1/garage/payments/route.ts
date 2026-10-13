@@ -1,23 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from '@/lib/server-auth';
-import { recordGaragePayment, ensureUuidCompanyId } from '@/lib/garage';
+import { requireServerAuth } from '@/lib/server-auth';
+import { recordGaragePayment } from '@/lib/garage';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ success: false, error: 'Malformed JSON payload' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const { company_id: inputCompanyId, job_id, amount, payment_method, reference, notes, paid_at } = body;
-  const companyId = ensureUuidCompanyId(inputCompanyId || session?.companyId || '');
+  const { job_id, amount, payment_method, reference, notes, paid_at } = body;
+
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'garage-auto',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
 
   if (!job_id) {
-    return NextResponse.json({ success: false, error: 'job_id is required' }, { status: 422 });
+    return NextResponse.json({ success: false, error: 'job_id est obligatoire' }, { status: 422 });
   }
   if (!amount || Number(amount) <= 0) {
     return NextResponse.json({ success: false, error: 'Montant de paiement invalide (> 0).' }, { status: 422 });
@@ -35,5 +41,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: result.error }, { status: 422 });
   }
 
-  return NextResponse.json({ success: true, payment: result.payment });
+  return NextResponse.json({ success: true, payment: result.payment }, { status: 201 });
 }

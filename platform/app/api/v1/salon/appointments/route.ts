@@ -1,35 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from '@/lib/server-auth';
+import { requireServerAuth } from '@/lib/server-auth';
 import {
   getSalonAppointments,
   createSalonAppointment,
   updateSalonAppointmentStatus,
-  ensureUuidCompanyId,
 } from '@/lib/salon';
-import { hasModuleAccess } from '@/lib/modules';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(req);
   const { searchParams } = new URL(req.url);
-  const companyId = ensureUuidCompanyId(searchParams.get('companyId') || session?.companyId || '');
+  const targetCompanyId = searchParams.get('companyId');
+
+  const auth = await requireServerAuth(req, {
+    targetCompanyId,
+    requiredModuleId: 'salon-beauty',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
+
+  const companyId = auth.session.companyId;
   const date = searchParams.get('date') || undefined;
   const staffId = searchParams.get('staffId') || undefined;
   const status = searchParams.get('status') || undefined;
   const search = searchParams.get('search') || undefined;
-
-  const hasAccess = await hasModuleAccess(companyId, 'salon-beauty');
-  if (!hasAccess) {
-    return NextResponse.json({ success: false, error: 'Module non activé pour cet établissement' }, { status: 403 });
-  }
 
   const appointments = await getSalonAppointments(companyId, date, staffId, status, search);
   return NextResponse.json({ success: true, appointments });
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
@@ -37,13 +36,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const companyId = ensureUuidCompanyId(body.company_id || session?.companyId || '');
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'salon-beauty',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
 
-  const hasAccess = await hasModuleAccess(companyId, 'salon-beauty');
-  if (!hasAccess) {
-    return NextResponse.json({ success: false, error: 'Module non activé pour cet établissement' }, { status: 403 });
-  }
-
+  const companyId = auth.session.companyId;
   const res = await createSalonAppointment(companyId, body);
   if (!res.success) {
     return NextResponse.json(res, { status: 400 });
@@ -53,7 +52,6 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await getServerSession(req);
   let body: any;
   try {
     body = await req.json();
@@ -61,22 +59,22 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Format JSON invalide' }, { status: 400 });
   }
 
-  const { appointmentId, status, company_id: inputCompanyId } = body;
-  const companyId = ensureUuidCompanyId(inputCompanyId || session?.companyId || '');
-
-  const hasAccess = await hasModuleAccess(companyId, 'salon-beauty');
-  if (!hasAccess) {
-    return NextResponse.json({ success: false, error: 'Module non activé pour cet établissement' }, { status: 403 });
+  const { appointment_id, status } = body;
+  if (!appointment_id || !status) {
+    return NextResponse.json({ success: false, error: 'appointment_id et status sont obligatoires' }, { status: 422 });
   }
 
-  if (!appointmentId || !status) {
-    return NextResponse.json({ success: false, error: 'appointmentId et status obligatoires' }, { status: 422 });
-  }
+  const auth = await requireServerAuth(req, {
+    targetCompanyId: body.company_id || body.companyId,
+    requiredModuleId: 'salon-beauty',
+  });
+  if (auth.errorResponse) return auth.errorResponse;
 
-  const res = await updateSalonAppointmentStatus(companyId, appointmentId, status);
+  const companyId = auth.session.companyId;
+  const res = await updateSalonAppointmentStatus(companyId, appointment_id, status);
   if (!res.success) {
     return NextResponse.json(res, { status: 400 });
   }
 
-  return NextResponse.json(res);
+  return NextResponse.json(res, { status: 200 });
 }
