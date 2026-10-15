@@ -84,13 +84,22 @@ export class MoteurAdapter {
     }
 
     // Build payload preserving referral attribution and fixed description
+    const saasId = this.config.saasId || '167a0c84-ce3c-488c-8367-d2e649933f34';
+    const appCode = this.config.appCode || 'demosaas';
+
     const payload = {
+      action: 'payments.collect',
+      app_code: appCode,
+      application_code: appCode,
+      saas_id: saasId,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: request.amount,
       currency: request.currency,
       country: request.country,
       idempotency_key: request.idempotencyKey,
       metadata: {
+        app_code: appCode,
+        saas_id: saasId,
         company_id: request.companyId,
         plan_id: request.planId,
         module_ids: request.moduleIds,
@@ -105,16 +114,32 @@ export class MoteurAdapter {
       callback_url: request.callbackUrl,
     };
 
+    const isSupabaseGateway = this.config.baseUrl.includes('engine-api-gateway');
+    const endpoint = this.config.baseUrl.endsWith('/api/v1/payments/collect')
+      ? this.config.baseUrl
+      : isSupabaseGateway
+      ? `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/collect`
+      : `${this.config.baseUrl.replace(/\/+$/, '')}/v1/checkout/sessions`;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.config.apiKey) {
+      headers['x-engine-api-key'] = this.config.apiKey;
+    }
+    const bearer = this.config.gatewayBearerToken || this.config.apiKey;
+    if (bearer) {
+      headers['Authorization'] = `Bearer ${bearer}`;
+      headers['apikey'] = bearer;
+    }
+    headers['X-Idempotency-Key'] = request.idempotencyKey;
+
     try {
       const response = await this.executeHttpRequest(
-        `${this.config.baseUrl}/v1/checkout/sessions`,
+        endpoint,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.config.apiKey}`,
-            'X-Idempotency-Key': request.idempotencyKey,
-          },
+          headers,
           body: JSON.stringify(payload),
         }
       );
@@ -127,8 +152,8 @@ export class MoteurAdapter {
           sessionId: '',
           reference: request.idempotencyKey,
           status: 'failed',
-          errorCode: json.error?.code || `HTTP_${response.status}`,
-          errorMessage: json.error?.message || json.message || 'Moteur payment session initialization failed',
+          errorCode: json.code || json.error?.code || `HTTP_${response.status}`,
+          errorMessage: json.message || json.error?.message || 'Moteur payment session initialization failed',
           raw: json,
         };
       }
@@ -180,13 +205,24 @@ export class MoteurAdapter {
 
     try {
       const identifier = encodeURIComponent(query.sessionId || query.reference);
+      const isSupabaseGateway = this.config.baseUrl.includes('engine-api-gateway');
+      const endpoint = isSupabaseGateway
+        ? `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/${identifier}`
+        : `${this.config.baseUrl.replace(/\/+$/, '')}/v1/payments/${identifier}`;
+
+      const headers: Record<string, string> = {};
+      if (this.config.apiKey) headers['x-engine-api-key'] = this.config.apiKey;
+      const bearer = this.config.gatewayBearerToken || this.config.apiKey;
+      if (bearer) {
+        headers['Authorization'] = `Bearer ${bearer}`;
+        headers['apikey'] = bearer;
+      }
+
       const response = await this.executeHttpRequest(
-        `${this.config.baseUrl}/v1/payments/${identifier}`,
+        endpoint,
         {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${this.config.apiKey}`,
-          },
+          headers,
         }
       );
 
@@ -244,14 +280,21 @@ export class MoteurAdapter {
       );
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.config.apiKey) headers['x-engine-api-key'] = this.config.apiKey;
+    const bearer = this.config.gatewayBearerToken || this.config.apiKey;
+    if (bearer) {
+      headers['Authorization'] = `Bearer ${bearer}`;
+      headers['apikey'] = bearer;
+    }
+
     const response = await this.executeHttpRequest(
       `${this.config.baseUrl}/v1/payments/${encodeURIComponent(request.reference)}/refund`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.config.apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
           amount: request.amount,
           reason: request.reason,
@@ -306,6 +349,11 @@ export class MoteurAdapter {
       // Support common format variants (e.g. 'sha256=abcdef...' or 'abcdef...')
       const rawHex = cleanHeader.startsWith('sha256=') ? cleanHeader.slice(7) : cleanHeader;
 
+      // Validate that rawHex is a valid 64-char hexadecimal string
+      if (!/^[0-9a-fA-F]{64}$/.test(rawHex)) {
+        return false;
+      }
+
       const expectedHex = crypto
         .createHmac('sha256', secret)
         .update(bodyString)
@@ -345,7 +393,7 @@ export class MoteurAdapter {
       const bodyString = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
       const parsed = JSON.parse(bodyString);
 
-      if (!parsed.event || !parsed.data) {
+      if (!parsed.event || (!parsed.data && parsed.event !== 'test.ping')) {
         return {
           valid: false,
           event: null,

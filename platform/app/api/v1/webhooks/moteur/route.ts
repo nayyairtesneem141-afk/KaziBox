@@ -30,8 +30,9 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2. Extract Signature Header ─────────────────────────────────────────────
-  // Inspect standard Moteur signature headers (x-moteur-signature, x-signature)
+  // Inspect standard Moteur & DPaaS signature headers (x-engine-signature first)
   const signatureHeader =
+    req.headers.get('x-engine-signature') ||
     req.headers.get('x-moteur-signature') ||
     req.headers.get('x-signature') ||
     req.headers.get('x-webhook-signature');
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
       {
         success: false,
         error: 'MISSING_SIGNATURE_HEADER',
-        message: 'Signature header (x-moteur-signature) is required.',
+        message: 'Signature header (x-engine-signature or x-moteur-signature) is required.',
       },
       { status: 401 }
     );
@@ -64,20 +65,66 @@ export async function POST(req: NextRequest) {
   const { valid, event, error } = adapter.parseWebhookPayload(rawBody, signatureHeader);
 
   if (!valid || !event) {
+    const isSyntaxError = error === 'INVALID_JSON' || error === 'MALFORMED_PAYLOAD';
     return NextResponse.json(
       {
         success: false,
         error: error || 'INVALID_SIGNATURE',
-        message: 'Cryptographic signature verification failed.',
+        message:
+          error === 'INVALID_JSON'
+            ? 'Malformed JSON payload.'
+            : error === 'MALFORMED_PAYLOAD'
+            ? 'Payload is missing required event fields.'
+            : 'Cryptographic signature verification failed.',
       },
-      { status: 401 }
+      { status: isSyntaxError ? 400 : 401 }
     );
   }
 
-  // ── 4. Dispatch Event into KaziBox Lifecycle ────────────────────────────────
+  // ── 4. Application Code Validation ──────────────────────────────────────────
+  const configuredAppCode = process.env.MOTEUR_APP_CODE || 'demosaas';
+  const payloadAppCode =
+    (event as any).app_code ||
+    (event as any).application_code ||
+    (event.data as any)?.app_code ||
+    (event.data as any)?.application_code ||
+    (event.data as any)?.metadata?.app_code;
+
+  if (payloadAppCode && payloadAppCode !== configuredAppCode) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'INVALID_APPLICATION_CODE',
+        message: `Event application code '${payloadAppCode}' does not match expected '${configuredAppCode}'.`,
+      },
+      { status: 400 }
+    );
+  }
+
+  // ── 5. Dispatch Event into KaziBox Lifecycle ────────────────────────────────
   try {
-    switch (event.event) {
+    switch (event.event as string) {
+      case 'test.ping': {
+        return NextResponse.json({
+          received: true,
+          event: 'test.ping',
+          message: 'Moteur DPaaS test ping successfully received and authenticated.',
+        });
+      }
+
+      case 'payment.completed':
       case 'payment.succeeded': {
+        if (!event.data?.reference || !event.data?.companyId) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Payment events must include reference and companyId.',
+            },
+            { status: 400 }
+          );
+        }
+
         const result = await moteurService.handlePaymentConfirmation({
           reference: event.data.reference,
           sessionId: event.data.sessionId,
@@ -101,6 +148,17 @@ export async function POST(req: NextRequest) {
       }
 
       case 'payment.failed': {
+        if (!event.data?.reference || !event.data?.companyId) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Payment failure events must include reference and companyId.',
+            },
+            { status: 400 }
+          );
+        }
+
         await moteurService.handlePaymentFailure({
           reference: event.data.reference,
           companyId: event.data.companyId,
@@ -158,6 +216,35 @@ export async function POST(req: NextRequest) {
           event: event.event,
           isDuplicate: renewResult.isDuplicate,
           reference: event.data.reference,
+        });
+      }
+
+      case 'commission.earned': {
+        // Moteur DPaaS handles ambassador commissions, wallets, and payouts centrally.
+        // KaziBox safely acknowledges without double-accounting.
+        return NextResponse.json({
+          received: true,
+          event: 'commission.earned',
+          acknowledged: true,
+          note: 'Ambassador commission accounted for in centralized Moteur ledger',
+        });
+      }
+
+      case 'payout.completed': {
+        return NextResponse.json({
+          received: true,
+          event: 'payout.completed',
+          acknowledged: true,
+          note: 'Payout processed by centralized Moteur infrastructure',
+        });
+      }
+
+      case 'payout.failed': {
+        return NextResponse.json({
+          received: true,
+          event: 'payout.failed',
+          acknowledged: true,
+          note: 'Payout failure logged from centralized Moteur infrastructure',
         });
       }
 

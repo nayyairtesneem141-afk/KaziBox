@@ -19,7 +19,8 @@ export interface MoteurConfigurationStatus {
   missingVariables: string[];
 }
 
-export const DEFAULT_MOTEUR_API_BASE_URL = 'https://moteur.kazibox.pro';
+export const DEFAULT_MOTEUR_API_BASE_URL = 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway';
+export const DEFAULT_MOTEUR_SAAS_ID = '167a0c84-ce3c-488c-8367-d2e649933f34';
 
 /**
  * Reads server environment variables for Moteur without leaking secret values
@@ -32,6 +33,9 @@ export function getMoteurConfig(): MoteurConfig | null {
 
   const baseUrl = process.env.MOTEUR_API_BASE_URL || process.env.MOTEUR_BACKEND_URL || DEFAULT_MOTEUR_API_BASE_URL;
   const apiKey = process.env.MOTEUR_API_KEY || process.env.MOTEUR_SECRET_KEY || '';
+  const gatewayBearerToken = process.env.MOTEUR_GATEWAY_BEARER_TOKEN || '';
+  const appCode = process.env.MOTEUR_APP_CODE || 'demosaas';
+  const saasId = process.env.MOTEUR_SAAS_ID || DEFAULT_MOTEUR_SAAS_ID;
   const webhookSecret = process.env.MOTEUR_WEBHOOK_SECRET || '';
   const environment = (process.env.MOTEUR_ENVIRONMENT === 'production' ? 'production' : 'sandbox') as 'sandbox' | 'production';
   const timeoutMs = Number(process.env.MOTEUR_TIMEOUT_MS) || 15000;
@@ -43,6 +47,9 @@ export function getMoteurConfig(): MoteurConfig | null {
   return {
     baseUrl: baseUrl.replace(/\/+$/, ''), // Strip trailing slashes
     apiKey,
+    gatewayBearerToken: gatewayBearerToken || undefined,
+    appCode,
+    saasId,
     webhookSecret,
     environment,
     paymentDescription: MOTEUR_PAYMENT_DESCRIPTION,

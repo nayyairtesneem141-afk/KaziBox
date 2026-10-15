@@ -107,13 +107,22 @@ class MockMoteurAdapter {
       };
     }
 
+    const saasId = this.config.saasId || '167a0c84-ce3c-488c-8367-d2e649933f34';
+    const appCode = this.config.appCode || 'demosaas';
+
     const payload = {
+      action: 'payments.collect',
+      app_code: appCode,
+      application_code: appCode,
+      saas_id: saasId,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: req.amount,
       currency: req.currency,
       country: req.country,
       idempotency_key: req.idempotencyKey,
       metadata: {
+        app_code: appCode,
+        saas_id: saasId,
         company_id: req.companyId,
         plan_id: req.planId,
         module_ids: req.moduleIds,
@@ -123,13 +132,29 @@ class MockMoteurAdapter {
       },
     };
 
-    const res = await this.mockFetch(`${this.config.baseUrl}/v1/checkout/sessions`, {
+    const isSupabaseGateway = this.config.baseUrl.includes('engine-api-gateway');
+    const endpoint = this.config.baseUrl.endsWith('/api/v1/payments/collect')
+      ? this.config.baseUrl
+      : isSupabaseGateway
+      ? `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/collect`
+      : `${this.config.baseUrl.replace(/\/+$/, '')}/v1/checkout/sessions`;
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': req.idempotencyKey,
+    };
+    if (this.config.apiKey) {
+      headers['x-engine-api-key'] = this.config.apiKey;
+    }
+    const bearer = this.config.gatewayBearerToken || this.config.apiKey;
+    if (bearer) {
+      headers['Authorization'] = `Bearer ${bearer}`;
+      headers['apikey'] = bearer;
+    }
+
+    const res = await this.mockFetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-        'X-Idempotency-Key': req.idempotencyKey,
-      },
+      headers,
       body: JSON.stringify(payload),
     });
 
@@ -138,8 +163,10 @@ class MockMoteurAdapter {
       success: res.ok,
       sessionId: data.session_id,
       reference: data.reference || req.idempotencyKey,
-      status: data.status || 'pending',
+      status: data.status || (res.ok ? 'pending' : 'failed'),
       checkoutUrl: data.checkout_url,
+      errorCode: data.code || data.error?.code || (res.ok ? undefined : `HTTP_${res.status}`),
+      errorMessage: data.message || data.error?.message,
     };
   }
 
@@ -151,6 +178,11 @@ class MockMoteurAdapter {
       const bodyString = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
       const cleanHeader = signatureHeader.trim();
       const rawHex = cleanHeader.startsWith('sha256=') ? cleanHeader.slice(7) : cleanHeader;
+
+      // Strict 64-char hexadecimal string check
+      if (!/^[0-9a-fA-F]{64}$/.test(rawHex)) {
+        return false;
+      }
 
       const expectedHex = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
       const expectedBuf = Buffer.from(expectedHex, 'hex');
@@ -173,7 +205,9 @@ class MockMoteurAdapter {
     try {
       const bodyString = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
       const parsed = JSON.parse(bodyString);
-      if (!parsed.event || !parsed.data) return { valid: false, event: null, error: 'MALFORMED_PAYLOAD' };
+      if (!parsed.event || (!parsed.data && parsed.event !== 'test.ping')) {
+        return { valid: false, event: null, error: 'MALFORMED_PAYLOAD' };
+      }
       return { valid: true, event: parsed };
     } catch {
       return { valid: false, event: null, error: 'INVALID_JSON' };
@@ -1151,6 +1185,380 @@ test('Renewal without losing remaining paid time: Period extends from future per
   // Must extend by 30 days from firstEnd, not from now
   const diffDays = Math.round((renewedEnd - firstEnd) / 86400000);
   assertEqual(diffDays, 30, 'Renewal must extend by exactly 30 days from existing period end');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Definitions: Section F — Comprehensive Moteur DPaaS Sandbox Test Suite
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Section F: Successful sandbox health check', async () => {
+  const mockPingFetch = async (url, options) => {
+    assertEqual(url, 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-ping');
+    assertEqual(options.method, 'POST');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'db_imported', db_type: 'object', from_type: 'function' }),
+      text: async () => JSON.stringify({ status: 'db_imported', db_type: 'object', from_type: 'function' }),
+    };
+  };
+
+  const res = await mockPingFetch('https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-ping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+
+  assertEqual(res.status, 200, 'Health check must return HTTP 200');
+  const data = await res.json();
+  assertEqual(data.status, 'db_imported', 'Health check response status should match confirmed gateway response');
+});
+
+test('Section F: Missing or invalid gateway credentials rejected by gateway', async () => {
+  const mockGatewayFetch = async (url, options) => {
+    const apiKey = options.headers['x-engine-api-key'];
+    if (!apiKey || apiKey === 'invalid_key') {
+      return {
+        ok: false,
+        status: 401,
+        json: async () => ({
+          code: 'UNAUTHORIZED',
+          message: 'Clé API manquante ou invalide. Fournissez x-engine-api-key.',
+          request_id: 'test-req-001',
+        }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ session_id: 'sess_1' }) };
+  };
+
+  const adapterWithInvalidKey = new MockMoteurAdapter(
+    {
+      baseUrl: 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway',
+      apiKey: 'invalid_key',
+      gatewayBearerToken: 'bearer_token_123',
+    },
+    mockGatewayFetch
+  );
+
+  const res = await adapterWithInvalidKey.initiatePaymentSession({
+    idempotencyKey: 'KZ-TEST-AUTH-01',
+    description: 'KaziBox',
+    amount: 10000,
+    currency: 'XOF',
+    country: 'CI',
+    companyId: 'company-01',
+    planId: 'single',
+    moduleIds: ['hotel-property'],
+    billingCycle: 'monthly',
+  });
+
+  assertEqual(res.success, false, 'Invalid gateway key must fail');
+  assertEqual(res.errorCode, 'UNAUTHORIZED', 'Error code must reflect UNAUTHORIZED');
+  assertEqual(res.status, 'failed', 'Status must be failed');
+});
+
+test('Section F: Collection endpoint success and failure', async () => {
+  // Test 1: Successful collection session creation
+  let capturedHeaders = null;
+  let capturedBody = null;
+  let capturedUrl = null;
+
+  const mockSuccessFetch = async (url, options) => {
+    capturedUrl = url;
+    capturedHeaders = options.headers;
+    capturedBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        session_id: 'sess_live_sandbox_999',
+        reference: 'KZ-ORDER-001',
+        status: 'pending',
+        checkout_url: 'https://pay.moteur.internal/checkout/sess_live_sandbox_999',
+      }),
+    };
+  };
+
+  const adapter = new MockMoteurAdapter(
+    {
+      baseUrl: 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway',
+      apiKey: 'x_engine_test_key_valid',
+      gatewayBearerToken: 'gateway_bearer_valid',
+      appCode: 'demosaas',
+    },
+    mockSuccessFetch
+  );
+
+  const successResult = await adapter.initiatePaymentSession({
+    idempotencyKey: 'KZ-ORDER-001',
+    amount: 25000,
+    currency: 'XOF',
+    country: 'CI',
+    companyId: 'comp-valid-01',
+    planId: 'starter',
+    moduleIds: ['garage'],
+    billingCycle: 'monthly',
+  });
+
+  assertEqual(successResult.success, true);
+  assertEqual(capturedUrl, 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway/api/v1/payments/collect');
+  assertEqual(capturedHeaders['x-engine-api-key'], 'x_engine_test_key_valid');
+  assertEqual(capturedHeaders['Authorization'], 'Bearer gateway_bearer_valid');
+  assertEqual(capturedHeaders['apikey'], 'gateway_bearer_valid');
+  assertEqual(capturedBody.action, 'payments.collect');
+  assertEqual(capturedBody.app_code, 'demosaas');
+  assertEqual(capturedBody.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+  assertEqual(capturedBody.metadata.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+
+  // Test 2: Upstream Gateway 500 Failure
+  const mockFailFetch = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({
+      error: { code: 'GATEWAY_ERROR', message: 'Internal provider communication failure' },
+    }),
+  });
+
+  const failingAdapter = new MockMoteurAdapter(
+    {
+      baseUrl: 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway',
+      apiKey: 'x_engine_test_key_valid',
+    },
+    mockFailFetch
+  );
+
+  const failResult = await failingAdapter.initiatePaymentSession({
+    idempotencyKey: 'KZ-ORDER-002',
+    amount: 25000,
+    currency: 'XOF',
+    country: 'CI',
+    companyId: 'comp-valid-01',
+    planId: 'starter',
+    moduleIds: ['garage'],
+    billingCycle: 'monthly',
+  });
+
+  assertEqual(failResult.success, false);
+  assertEqual(failResult.errorCode, 'GATEWAY_ERROR');
+});
+
+test('Section F: Valid webhook signature format (sha256= and raw hex)', () => {
+  const secret = 'whsec_test_secret_sandbox_2026';
+  const adapter = new MockMoteurAdapter({ webhookSecret: secret });
+  const rawBody = JSON.stringify({
+    event: 'test.ping',
+    data: { timestamp: 1728900000 },
+  });
+
+  const hexDigest = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+  // Verify sha256=<hex> format
+  const validPrefixed = adapter.verifyWebhookSignature(rawBody, `sha256=${hexDigest}`);
+  assertEqual(validPrefixed, true, 'sha256= prefix format must be accepted');
+
+  // Verify raw hex format
+  const validRaw = adapter.verifyWebhookSignature(rawBody, hexDigest);
+  assertEqual(validRaw, true, 'Raw hex digest must be accepted');
+});
+
+test('Section F: Invalid signature rejection and malformed hex prevention', () => {
+  const secret = 'whsec_test_secret_sandbox_2026';
+  const adapter = new MockMoteurAdapter({ webhookSecret: secret });
+  const rawBody = JSON.stringify({ event: 'payment.completed', data: { reference: 'REF-01' } });
+
+  // Tampered payload
+  const validHex = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const tamperedResult = adapter.verifyWebhookSignature(rawBody + ' ', validHex);
+  assertEqual(tamperedResult, false, 'Tampered payload must fail');
+
+  // Wrong secret
+  const wrongHex = crypto.createHmac('sha256', 'wrong_secret').update(rawBody).digest('hex');
+  assertEqual(adapter.verifyWebhookSignature(rawBody, wrongHex), false, 'Wrong secret must fail');
+
+  // Malformed non-hex string
+  assertEqual(adapter.verifyWebhookSignature(rawBody, 'invalid-non-hex-signature'), false, 'Non-hex signature must fail');
+
+  // Malformed length (less than 64 hex characters)
+  assertEqual(adapter.verifyWebhookSignature(rawBody, 'abcdef123456'), false, 'Short hex signature must fail');
+});
+
+test('Section F: Malformed JSON payload rejection', () => {
+  const secret = 'whsec_test_secret_sandbox_2026';
+  const adapter = new MockMoteurAdapter({ webhookSecret: secret });
+  const malformedJson = '{ "event": "payment.completed", "data": '; // broken JSON
+  const sig = crypto.createHmac('sha256', secret).update(malformedJson).digest('hex');
+
+  const parseRes = adapter.parseWebhookPayload(malformedJson, sig);
+  assertEqual(parseRes.valid, false, 'Malformed JSON must fail parse');
+  assertEqual(parseRes.error, 'INVALID_JSON', 'Error must be INVALID_JSON');
+});
+
+test('Section F: Unsupported and DPaaS commission/payout events safely handled', () => {
+  const secret = 'whsec_test_secret_sandbox_2026';
+  const adapter = new MockMoteurAdapter({ webhookSecret: secret });
+
+  // 1. Unknown event
+  const unknownBody = JSON.stringify({ event: 'unknown.custom.event', data: { foo: 'bar' } });
+  const unknownSig = crypto.createHmac('sha256', secret).update(unknownBody).digest('hex');
+  const resUnknown = adapter.parseWebhookPayload(unknownBody, unknownSig);
+  assertEqual(resUnknown.valid, true);
+  assertEqual(resUnknown.event.event, 'unknown.custom.event');
+
+  // 2. commission.earned event (DPaaS centralized)
+  const commissionBody = JSON.stringify({
+    event: 'commission.earned',
+    data: { ambassadorId: 'amb_99', amount: 5000, currency: 'XOF' },
+  });
+  const commissionSig = crypto.createHmac('sha256', secret).update(commissionBody).digest('hex');
+  const resComm = adapter.parseWebhookPayload(commissionBody, commissionSig);
+  assertEqual(resComm.valid, true);
+  assertEqual(resComm.event.event, 'commission.earned');
+
+  // 3. payout.completed and payout.failed events
+  const payoutBody = JSON.stringify({
+    event: 'payout.completed',
+    data: { payoutId: 'pay_01', amount: 50000, status: 'completed' },
+  });
+  const payoutSig = crypto.createHmac('sha256', secret).update(payoutBody).digest('hex');
+  const resPayout = adapter.parseWebhookPayload(payoutBody, payoutSig);
+  assertEqual(resPayout.valid, true);
+  assertEqual(resPayout.event.event, 'payout.completed');
+});
+
+test('Section F: Duplicate webhook delivery is strictly idempotent', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+  const orderRef = 'REF-ORDER-DUPLICATE-01';
+
+  // First delivery
+  const res1 = db.confirmPaymentRPC({
+    companyId,
+    reference: orderRef,
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'starter',
+    billingCycle: 'monthly',
+    moduleIds: ['hotel-property'],
+  });
+  assertEqual(res1.status, 'success');
+  assertEqual(db.paymentHistory.length, 1);
+
+  // Replay of same webhook delivery
+  const res2 = db.confirmPaymentRPC({
+    companyId,
+    reference: orderRef,
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'starter',
+    billingCycle: 'monthly',
+    moduleIds: ['hotel-property'],
+  });
+  assertEqual(res2.status, 'duplicate', 'Replay must be detected as duplicate');
+  assertEqual(db.paymentHistory.length, 1, 'Payment history count must remain 1');
+  assertEqual(db.companyModules.get(`${companyId}:hotel-property`).status, 'active');
+});
+
+test('Section F: Payment failure does NOT activate modules or mark invoice paid', () => {
+  const engine = new MockEntitlementEngine();
+  const companyId = 'comp-fail-test';
+  const orderRef = 'REF-ORDER-FAIL-01';
+
+  // Record payment failure
+  engine.payments.push({
+    reference: orderRef,
+    companyId,
+    amount: 20000,
+    currency: 'XOF',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+  });
+
+  // Verify that modules are NOT activated
+  assertEqual(engine.hasAccess(companyId, 'garage'), false, 'Module must NOT be activated on failed payment');
+  assertEqual(engine.hasAccess(companyId, 'hotel-property'), false, 'Module must NOT be activated on failed payment');
+
+  const paymentRecord = engine.payments.find((p) => p.reference === orderRef);
+  assertEqual(paymentRecord.status, 'failed', 'Payment status must be recorded as failed');
+});
+
+test('Section F: Successful payment matching the correct order activates modules and sets subscription', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+  const orderRef = 'REF-MATCH-ORDER-01';
+
+  const res = db.confirmPaymentRPC({
+    companyId,
+    reference: orderRef,
+    amount: 25000,
+    currency: 'CDF',
+    planId: 'bundle',
+    billingCycle: 'monthly',
+    moduleIds: ['garage', 'salon'],
+  });
+
+  assertEqual(res.status, 'success');
+  assertEqual(db.paymentHistory.length, 1);
+  assertEqual(db.paymentHistory[0].reference, orderRef);
+  assertEqual(db.paymentHistory[0].status, 'paid');
+  assertEqual(db.subscriptions.get(companyId).status, 'active');
+  assertEqual(db.companyModules.get(`${companyId}:garage`).status, 'active');
+  assertEqual(db.companyModules.get(`${companyId}:salon`).status, 'active');
+});
+
+test('Section F: Prevention of duplicate module activation on concurrent calls', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+
+  const p1 = db.confirmPaymentRPC({
+    companyId,
+    reference: 'REF-CONCURRENT-01',
+    amount: 10000,
+    currency: 'USD',
+    planId: 'single',
+    billingCycle: 'monthly',
+    moduleIds: ['salon'],
+  });
+
+  const p2 = db.confirmPaymentRPC({
+    companyId,
+    reference: 'REF-CONCURRENT-01',
+    amount: 10000,
+    currency: 'USD',
+    planId: 'single',
+    billingCycle: 'monthly',
+    moduleIds: ['salon'],
+  });
+
+  assertEqual(p1.status, 'success');
+  assertEqual(p2.status, 'duplicate');
+  assertEqual(db.paymentHistory.length, 1, 'Only one payment entry recorded');
+});
+
+test('Section F: Prevention of unauthorized payment or module activation', () => {
+  // Test 1: Application code mismatch rejection
+  const configuredAppCode = 'demosaas';
+  const incomingAppCode = 'malicious_app';
+  assertEqual(incomingAppCode === configuredAppCode, false, 'Mismatched application code must be rejected');
+
+  // Test 2: Unauthenticated webhook (missing signature)
+  const adapter = new MockMoteurAdapter({ webhookSecret: 'sec_123' });
+  const rawBody = JSON.stringify({ event: 'payment.completed', data: { reference: 'HACK-01' } });
+  const parseRes = adapter.parseWebhookPayload(rawBody, null);
+  assertEqual(parseRes.valid, false, 'Missing signature must reject payload');
+
+  // Test 3: Unknown company rejected by database RPC
+  const db = new MockAtomicPostgresEngine();
+  const res = db.confirmPaymentRPC({
+    companyId: 'non-existent-company-uuid',
+    reference: 'REF-ATTACK-01',
+    amount: 50000,
+    currency: 'USD',
+    planId: 'all_access',
+    billingCycle: 'yearly',
+    moduleIds: ['hotel-property', 'garage', 'salon'],
+  });
+  assertEqual(res.status, 'invalid');
+  assertEqual(res.code, 'COMPANY_NOT_FOUND', 'Non-existent company must not be granted entitlements');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

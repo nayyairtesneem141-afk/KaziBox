@@ -31,6 +31,9 @@ export type MoteurBillingCycle = 'monthly' | 'yearly';
 export interface MoteurConfig {
   baseUrl: string;
   apiKey: string;
+  gatewayBearerToken?: string;
+  appCode: string;
+  saasId: string;
   webhookSecret: string;
   environment: 'sandbox' | 'production';
   paymentDescription: string;

@@ -259,8 +259,8 @@ async function runPhase8Verification() {
     const modulesLibContent = fs.readFileSync(modulesLibPath, 'utf8');
 
     const handlesSalonAccess =
-      modulesLibContent.includes("moduleId === 'hair-salon'") &&
-      modulesLibContent.includes("sub.includedModuleIds.includes('salon-beauty')");
+      modulesLibContent.includes("['hair-salon', 'salon', 'salon-beauty'].includes(moduleId)") &&
+      modulesLibContent.includes("targetIds.some((id) => sub.includedModuleIds.includes(id))");
     const handlesDeactivateAlias =
       modulesLibContent.includes("['hair-salon', 'salon', 'salon-beauty']");
 
