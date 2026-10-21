@@ -558,7 +558,7 @@ export async function deactivateModule(
 
         if (subIdx !== -1) {
           const sub = store.subscriptions[subIdx];
-          sub.includedModuleIds = sub.includedModuleIds.filter((id) => !targetIds.includes(id));
+          sub.includedModuleIds = (sub.includedModuleIds || []).filter((id: string) => !targetIds.includes(id));
           store.subscriptions[subIdx] = { ...sub };
           setStoreItem('SUBSCRIPTIONS', store.subscriptions);
         }
@@ -631,7 +631,7 @@ export async function deactivateModule(
 
   if (subIdx !== -1) {
     const sub = store.subscriptions[subIdx];
-    sub.includedModuleIds = sub.includedModuleIds.filter((id) => id !== moduleId && id !== moduleId.replace('-auto', ''));
+    sub.includedModuleIds = (sub.includedModuleIds || []).filter((id: string) => id !== moduleId && id !== moduleId.replace('-auto', ''));
     store.subscriptions[subIdx] = { ...sub };
     setStoreItem('SUBSCRIPTIONS', store.subscriptions);
   }

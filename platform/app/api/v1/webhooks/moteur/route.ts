@@ -114,7 +114,19 @@ export async function POST(req: NextRequest) {
 
       case 'payment.completed':
       case 'payment.succeeded': {
-        if (!event.data?.reference || !event.data?.companyId) {
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference || !companyId) {
           return NextResponse.json(
             {
               success: false,
@@ -125,30 +137,90 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        const planId =
+          event.data?.planId ||
+          (event.data as any)?.plan_id ||
+          (event.data as any)?.metadata?.plan_id ||
+          (event.data as any)?.metadata?.planId ||
+          'starter';
+        const moduleIds =
+          event.data?.moduleIds ||
+          (event.data as any)?.module_ids ||
+          (event.data as any)?.metadata?.module_ids ||
+          [];
+        const billingCycle =
+          event.data?.billingCycle ||
+          (event.data as any)?.billing_cycle ||
+          (event.data as any)?.metadata?.billing_cycle ||
+          'monthly';
+        const amount =
+          event.data?.amount !== undefined
+            ? Number(event.data.amount)
+            : Number((event.data as any)?.metadata?.amount || 0);
+        const currency =
+          event.data?.currency ||
+          (event.data as any)?.metadata?.currency ||
+          'XOF';
+
         const result = await moteurService.handlePaymentConfirmation({
-          reference: event.data.reference,
-          sessionId: event.data.sessionId,
-          companyId: event.data.companyId,
-          planId: event.data.planId,
-          moduleIds: event.data.moduleIds || [],
-          billingCycle: event.data.billingCycle || 'monthly',
-          amount: event.data.amount,
-          currency: event.data.currency,
-          referralCode: event.data.referralCode,
-          providerReference: event.data.providerReference,
-          paidAt: event.data.paidAt || event.occurredAt,
+          reference,
+          sessionId: event.data?.sessionId || (event.data as any)?.session_id,
+          companyId,
+          planId,
+          moduleIds,
+          billingCycle,
+          amount,
+          currency,
+          referralCode: event.data?.referralCode || (event.data as any)?.referral_code,
+          providerReference: event.data?.providerReference || (event.data as any)?.provider_reference,
+          paidAt: event.data?.paidAt || (event.data as any)?.paid_at || event.occurredAt,
         });
+
+        if (!result.success) {
+          const isInvalidTransition =
+            Boolean((result as any).isInvalidTransition) ||
+            (result as any).code === 'PAYMENT_ALREADY_TERMINATED';
+
+          return NextResponse.json(
+            {
+              success: false,
+              error: isInvalidTransition
+                ? 'INVALID_PAYMENT_STATE_TRANSITION'
+                : 'PAYMENT_CONFIRMATION_FAILED',
+              message:
+                result.message ||
+                (isInvalidTransition
+                  ? 'Payment reference was already terminated (failed/refunded) and cannot be confirmed.'
+                  : 'Payment processing failed.'),
+              isDuplicate: false,
+              reference,
+            },
+            { status: isInvalidTransition ? 409 : 400 }
+          );
+        }
 
         return NextResponse.json({
           received: true,
           event: event.event,
-          isDuplicate: result.isDuplicate,
-          reference: event.data.reference,
+          isDuplicate: Boolean(result.isDuplicate),
+          reference,
         });
       }
 
       case 'payment.failed': {
-        if (!event.data?.reference || !event.data?.companyId) {
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference || !companyId) {
           return NextResponse.json(
             {
               success: false,
@@ -159,63 +231,198 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        await moteurService.handlePaymentFailure({
-          reference: event.data.reference,
-          companyId: event.data.companyId,
+        const failResult = await moteurService.handlePaymentFailure({
+          reference,
+          companyId,
           reason: (event.data.metadata as any)?.failure_reason,
         });
 
         return NextResponse.json({
           received: true,
           event: event.event,
-          reference: event.data.reference,
+          isDuplicate: (failResult as any)?.isDuplicate ?? false,
+          reference,
         });
       }
 
       case 'payment.expired': {
-        await moteurService.handlePaymentExpiration({
-          reference: event.data.reference,
-          companyId: event.data.companyId,
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Payment expiration events must include reference.',
+            },
+            { status: 400 }
+          );
+        }
+
+        const expireResult = await moteurService.handlePaymentExpiration({
+          reference,
+          companyId: companyId || '',
         });
 
         return NextResponse.json({
           received: true,
           event: event.event,
-          reference: event.data.reference,
+          isDuplicate: (expireResult as any)?.isDuplicate ?? false,
+          reference,
+        });
+      }
+
+      case 'payment.cancelled': {
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Payment cancellation events must include reference.',
+            },
+            { status: 400 }
+          );
+        }
+
+        const cancelResult = await moteurService.handlePaymentCancellation({
+          reference,
+          companyId,
+          reason: (event.data?.metadata as any)?.cancellation_reason,
+        });
+
+        return NextResponse.json({
+          received: true,
+          event: event.event,
+          isDuplicate: Boolean(cancelResult.isDuplicate),
+          status: 'cancelled',
+          reference,
         });
       }
 
       case 'payment.refunded': {
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference || !companyId) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Payment refund events must include reference and companyId.',
+            },
+            { status: 400 }
+          );
+        }
+
         const refundResult = await moteurService.handlePaymentRefund({
-          reference: event.data.reference,
-          companyId: event.data.companyId,
+          reference,
+          companyId,
           reason: (event.data.metadata as any)?.refund_reason,
         });
 
         return NextResponse.json({
           received: true,
           event: event.event,
-          isDuplicate: refundResult.isDuplicate,
-          reference: event.data.reference,
+          isDuplicate: Boolean(refundResult.isDuplicate),
+          reference,
         });
       }
 
       case 'subscription.renewed': {
+        const reference =
+          event.data?.reference ||
+          (event.data as any)?.idempotency_key ||
+          (event.data as any)?.idempotencyKey;
+        const companyId =
+          event.data?.companyId ||
+          (event.data as any)?.company_id ||
+          (event.data as any)?.workspace_id ||
+          (event.data as any)?.workspaceId ||
+          (event.data as any)?.metadata?.company_id ||
+          (event.data as any)?.metadata?.companyId;
+
+        if (!reference || !companyId) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'MISSING_REQUIRED_FIELDS',
+              message: 'Subscription renewal events must include reference and companyId.',
+            },
+            { status: 400 }
+          );
+        }
+
+        const planId =
+          event.data?.planId ||
+          (event.data as any)?.plan_id ||
+          (event.data as any)?.metadata?.plan_id ||
+          (event.data as any)?.metadata?.planId ||
+          'starter';
+        const moduleIds =
+          event.data?.moduleIds ||
+          (event.data as any)?.module_ids ||
+          (event.data as any)?.metadata?.module_ids ||
+          [];
+        const billingCycle =
+          event.data?.billingCycle ||
+          (event.data as any)?.billing_cycle ||
+          (event.data as any)?.metadata?.billing_cycle ||
+          'monthly';
+        const amount =
+          event.data?.amount !== undefined
+            ? Number(event.data.amount)
+            : Number((event.data as any)?.metadata?.amount || 0);
+        const currency =
+          event.data?.currency ||
+          (event.data as any)?.metadata?.currency ||
+          'XOF';
+
         const renewResult = await moteurService.handlePaymentRenewal({
-          reference: event.data.reference,
-          companyId: event.data.companyId,
-          planId: event.data.planId,
-          moduleIds: event.data.moduleIds || [],
-          billingCycle: event.data.billingCycle || 'monthly',
-          amount: event.data.amount,
-          currency: event.data.currency,
+          reference,
+          companyId,
+          planId,
+          moduleIds,
+          billingCycle,
+          amount,
+          currency,
         });
 
         return NextResponse.json({
           received: true,
           event: event.event,
-          isDuplicate: renewResult.isDuplicate,
-          reference: event.data.reference,
+          isDuplicate: Boolean(renewResult.isDuplicate),
+          reference,
         });
       }
 

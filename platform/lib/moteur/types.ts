@@ -186,6 +186,7 @@ export interface MoteurWebhookEvent {
     | 'payment.failed'
     | 'payment.expired'
     | 'payment.refunded'
+    | 'payment.cancelled'
     | 'subscription.renewed';
   occurredAt: string;
   data: {
@@ -213,6 +214,7 @@ export interface MoteurWebhookEvent {
 export interface EntitlementGrantResult {
   success: boolean;
   isDuplicate: boolean;
+  isInvalidTransition?: boolean;
   companyId: string;
   status: 'active' | 'suspended' | 'expired' | 'cancelled';
   planId: string;

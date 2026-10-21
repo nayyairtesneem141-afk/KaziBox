@@ -172,6 +172,45 @@ export class MoteurPaymentService {
       if (isSupabaseConfigured()) {
         const supabase: any = createAdminClient() || createServerClient();
         if (supabase) {
+          // Pre-check persistent database idempotency by reference across serverless instances
+          try {
+            const { data: existingPayment } = await supabase
+              .from('payment_history')
+              .select('id, status, company_id')
+              .eq('reference', data.reference)
+              .maybeSingle();
+
+            if (existingPayment) {
+              if (existingPayment.status === 'paid') {
+                return {
+                  success: true,
+                  isDuplicate: true,
+                  companyId: data.companyId,
+                  status: 'active',
+                  planId: data.planId,
+                  activatedModuleIds: data.moduleIds,
+                  reference: data.reference,
+                  message: 'Payment has already been processed and confirmed (idempotent)',
+                };
+              }
+              if (existingPayment.status === 'refunded' || existingPayment.status === 'failed') {
+                return {
+                  success: false,
+                  isDuplicate: false,
+                  isInvalidTransition: true,
+                  companyId: data.companyId,
+                  status: 'cancelled',
+                  planId: data.planId,
+                  activatedModuleIds: [],
+                  reference: data.reference,
+                  message: `Payment reference is already marked as ${existingPayment.status}; confirmation rejected.`,
+                };
+              }
+            }
+          } catch {
+            // Non-blocking pre-check failure, proceed to RPC
+          }
+
           try {
             const { data: rpcRes, error: rpcErr } = await supabase.rpc('confirm_moteur_payment', {
               p_company_id: data.companyId,
@@ -224,6 +263,7 @@ export class MoteurPaymentService {
                 return {
                   success: false,
                   isDuplicate: false,
+                  isInvalidTransition: rpcRes.code === 'PAYMENT_ALREADY_TERMINATED',
                   companyId: data.companyId,
                   status: 'cancelled',
                   planId: data.planId,
@@ -294,21 +334,35 @@ export class MoteurPaymentService {
           const { data: existingPayment } = await supabase
             .from('payment_history')
             .select('id, status')
-            .eq('company_id', data.companyId)
-            .eq('description', `Moteur Payment: ${data.reference}`)
+            .or(`reference.eq.${data.reference},description.eq.Moteur Payment: ${data.reference}`)
             .maybeSingle();
 
-          if (existingPayment && existingPayment.status === 'paid') {
-            return {
-              success: true,
-              isDuplicate: true,
-              companyId: data.companyId,
-              status: 'active',
-              planId: data.planId,
-              activatedModuleIds: data.moduleIds,
-              reference: data.reference,
-              message: 'Payment already processed (idempotent)',
-            };
+          if (existingPayment) {
+            if (existingPayment.status === 'paid') {
+              return {
+                success: true,
+                isDuplicate: true,
+                companyId: data.companyId,
+                status: 'active',
+                planId: data.planId,
+                activatedModuleIds: data.moduleIds,
+                reference: data.reference,
+                message: 'Payment already processed (idempotent)',
+              };
+            }
+            if (existingPayment.status === 'failed' || existingPayment.status === 'refunded') {
+              return {
+                success: false,
+                isDuplicate: false,
+                isInvalidTransition: true,
+                companyId: data.companyId,
+                status: 'cancelled',
+                planId: data.planId,
+                activatedModuleIds: [],
+                reference: data.reference,
+                message: `Payment reference is already marked as ${existingPayment.status}; confirmation rejected.`,
+              };
+            }
           }
         }
       }
@@ -316,20 +370,35 @@ export class MoteurPaymentService {
       // ── 2. Idempotency Check in Local Store ───────────────────────────────────
       const store = getStore();
       const existingLocal = store.payments.find(
-        (p) => p.invoiceNumber === invoiceNumber || p.id === data.reference
+        (p) => p.invoiceNumber === invoiceNumber || p.id === data.reference || p.invoiceNumber === data.reference
       );
 
-      if (existingLocal && existingLocal.status === 'paid') {
-        return {
-          success: true,
-          isDuplicate: true,
-          companyId: data.companyId,
-          status: 'active',
-          planId: data.planId,
-          activatedModuleIds: data.moduleIds,
-          reference: data.reference,
-          message: 'Payment already processed (idempotent)',
-        };
+      if (existingLocal) {
+        if (existingLocal.status === 'paid') {
+          return {
+            success: true,
+            isDuplicate: true,
+            companyId: data.companyId,
+            status: 'active',
+            planId: data.planId,
+            activatedModuleIds: data.moduleIds,
+            reference: data.reference,
+            message: 'Payment already processed (idempotent)',
+          };
+        }
+        if (existingLocal.status === 'failed' || existingLocal.status === 'refunded') {
+          return {
+            success: false,
+            isDuplicate: false,
+            isInvalidTransition: true,
+            companyId: data.companyId,
+            status: 'cancelled',
+            planId: data.planId,
+            activatedModuleIds: [],
+            reference: data.reference,
+            message: `Payment reference is already marked as ${existingLocal.status}; confirmation rejected.`,
+          };
+        }
       }
 
       // ── 3. Calculate Period Dates (Renewal Extension Aware) ───────────────────
@@ -432,6 +501,7 @@ export class MoteurPaymentService {
           currency: data.currency,
           status: 'paid',
           description: `Moteur Payment: ${data.reference}`,
+          reference: data.reference,
           invoice_url: '#',
         });
       }
@@ -463,7 +533,7 @@ export class MoteurPaymentService {
     reference: string;
     companyId: string;
     reason?: string;
-  }): Promise<{ success: boolean; reference: string }> {
+  }): Promise<{ success: boolean; isDuplicate: boolean; reference: string }> {
     const sessions = getSessionsMap();
     const session = sessions.get(data.reference);
     if (session) {
@@ -471,12 +541,58 @@ export class MoteurPaymentService {
       session.updatedAt = new Date().toISOString();
     }
 
+    let isDuplicate = false;
+
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          const { data: existing } = await supabase
+            .from('payment_history')
+            .select('id, status')
+            .eq('reference', data.reference)
+            .maybeSingle();
+
+          if (existing) {
+            if (existing.status === 'failed' || existing.status === 'refunded') {
+              isDuplicate = true;
+            } else if (existing.status !== 'paid') {
+              await supabase
+                .from('payment_history')
+                .update({ status: 'failed' })
+                .eq('id', existing.id);
+            }
+          } else if (data.companyId) {
+            const { data: comp } = await supabase
+              .from('companies')
+              .select('id')
+              .eq('id', data.companyId)
+              .maybeSingle();
+
+            if (comp) {
+              await supabase.from('payment_history').insert({
+                company_id: data.companyId,
+                amount: 0,
+                currency: 'XOF',
+                status: 'failed',
+                description: `Moteur Payment Failed: ${data.reference}`,
+                reference: data.reference,
+                invoice_url: '#',
+              });
+            }
+          }
+        } catch {
+          // Non-blocking
+        }
+      }
+    }
+
     await notifyPaymentFailed(
       data.companyId,
       data.reason || 'Le règlement via Moteur n’a pas abouti.'
     );
 
-    return { success: true, reference: data.reference };
+    return { success: true, isDuplicate, reference: data.reference };
   }
 
   /**
@@ -485,7 +601,7 @@ export class MoteurPaymentService {
   public async handlePaymentExpiration(data: {
     reference: string;
     companyId: string;
-  }): Promise<{ success: boolean; reference: string }> {
+  }): Promise<{ success: boolean; isDuplicate: boolean; reference: string }> {
     const sessions = getSessionsMap();
     const session = sessions.get(data.reference);
     if (session) {
@@ -493,7 +609,130 @@ export class MoteurPaymentService {
       session.updatedAt = new Date().toISOString();
     }
 
-    return { success: true, reference: data.reference };
+    let isDuplicate = false;
+
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          const { data: existing } = await supabase
+            .from('payment_history')
+            .select('id, status')
+            .eq('reference', data.reference)
+            .maybeSingle();
+
+          if (existing) {
+            if (existing.status === 'failed' || existing.status === 'refunded') {
+              isDuplicate = true;
+            }
+          } else if (data.companyId) {
+            const { data: comp } = await supabase
+              .from('companies')
+              .select('id')
+              .eq('id', data.companyId)
+              .maybeSingle();
+
+            if (comp) {
+              await supabase.from('payment_history').insert({
+                company_id: data.companyId,
+                amount: 0,
+                currency: 'XOF',
+                status: 'failed',
+                description: `Moteur Payment Expired: ${data.reference}`,
+                reference: data.reference,
+                invoice_url: '#',
+              });
+            }
+          }
+        } catch {
+          // Non-blocking
+        }
+      }
+    }
+
+    return { success: true, isDuplicate, reference: data.reference };
+  }
+
+  /**
+   * Handles payment cancellation from Moteur (e.g. checkout session cancelled by user or merchant)
+   */
+  public async handlePaymentCancellation(data: {
+    reference: string;
+    companyId?: string;
+    reason?: string;
+  }): Promise<{ success: boolean; isDuplicate: boolean; reference: string }> {
+    const sessions = getSessionsMap();
+    const session = sessions.get(data.reference);
+    if (session) {
+      session.status = 'failed';
+      session.updatedAt = new Date().toISOString();
+    }
+
+    let isDuplicate = false;
+
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          const { data: existing } = await supabase
+            .from('payment_history')
+            .select('id, status')
+            .eq('reference', data.reference)
+            .maybeSingle();
+
+          if (existing) {
+            if (existing.status === 'failed' || existing.status === 'refunded') {
+              isDuplicate = true;
+            }
+          } else if (data.companyId) {
+            const { data: comp } = await supabase
+              .from('companies')
+              .select('id')
+              .eq('id', data.companyId)
+              .maybeSingle();
+
+            if (comp) {
+              await supabase.from('payment_history').insert({
+                company_id: data.companyId,
+                amount: 0,
+                currency: 'XOF',
+                status: 'failed',
+                description: `Moteur Payment Cancelled: ${data.reference}`,
+                reference: data.reference,
+                invoice_url: '#',
+              });
+            }
+          }
+        } catch {
+          // Non-blocking
+        }
+      }
+    }
+
+    const store = getStore();
+    const existingLocal = store.payments.find(
+      (p) => p.invoiceNumber === data.reference || p.id === data.reference
+    );
+    if (existingLocal) {
+      if (existingLocal.status === 'failed' || existingLocal.status === 'refunded') {
+        isDuplicate = true;
+      }
+    } else if (data.companyId) {
+      store.payments.push({
+        id: data.reference,
+        invoiceNumber: data.reference,
+        amount: 0,
+        currency: 'XOF',
+        date: new Date().toISOString().split('T')[0],
+        status: 'failed',
+        description: `Moteur Payment Cancelled: ${data.reference}`,
+        pdfUrl: '#',
+        reference: data.reference,
+      });
+      setStoreItem('PAYMENTS', store.payments);
+    }
+
+    return { success: true, isDuplicate, reference: data.reference };
   }
 
   /**

@@ -1076,9 +1076,23 @@ const STORAGE_KEYS = {
 const STORE_VERSION = 'v3.4.0';
 const STORE_VERSION_KEY = 'kazibox_db_schema_version';
 
-export const getStore = () => {
-  if (typeof window === 'undefined') {
-    return {
+const globalForStorage = globalThis as unknown as {
+  kaziboxServerStore?: {
+    workspaces: any[];
+    users: any[];
+    members: any[];
+    notifications: any[];
+    modules: any[];
+    subscriptions: any[];
+    payments: any[];
+    apiKeys: any[];
+    directoryEntries: any[];
+  };
+};
+
+function getServerStore() {
+  if (!globalForStorage.kaziboxServerStore) {
+    globalForStorage.kaziboxServerStore = {
       workspaces: [...INITIAL_WORKSPACES],
       users: [...INITIAL_USERS],
       members: [...INITIAL_MEMBERS],
@@ -1089,6 +1103,13 @@ export const getStore = () => {
       apiKeys: [...INITIAL_API_KEYS],
       directoryEntries: [],
     };
+  }
+  return globalForStorage.kaziboxServerStore;
+}
+
+export const getStore = () => {
+  if (typeof window === 'undefined') {
+    return getServerStore();
   }
 
   // Version check and migration: automatically clear old mock collections when version changes
@@ -1146,7 +1167,25 @@ export const getStore = () => {
 };
 
 export const setStoreItem = <T>(key: keyof typeof STORAGE_KEYS, val: T) => {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined') {
+    const s = getServerStore();
+    const propMap: Record<string, string> = {
+      WORKSPACES: 'workspaces',
+      USERS: 'users',
+      MEMBERS: 'members',
+      NOTIFICATIONS: 'notifications',
+      MODULES: 'modules',
+      SUBSCRIPTIONS: 'subscriptions',
+      PAYMENTS: 'payments',
+      API_KEYS: 'apiKeys',
+      DIRECTORY_ENTRIES: 'directoryEntries',
+    };
+    const prop = propMap[key];
+    if (prop && s) {
+      (s as any)[prop] = val;
+    }
+    return;
+  }
   try {
     localStorage.setItem(STORAGE_KEYS[key], JSON.stringify(val));
   } catch (err) {

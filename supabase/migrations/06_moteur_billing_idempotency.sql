@@ -63,8 +63,8 @@ DECLARE
   v_interval_days INT;
   v_mod TEXT;
 BEGIN
-  -- 1. Transaction-level advisory lock serializes concurrent executions for this company & reference
-  PERFORM pg_advisory_xact_lock(hashtext('moteur_billing:' || p_company_id::text || ':' || p_reference));
+  -- 1. Transaction-level advisory lock serializes concurrent executions for this reference
+  PERFORM pg_advisory_xact_lock(hashtext('moteur_billing:' || p_reference));
 
   -- 2. Trusted parameter validations
   IF p_company_id IS NULL THEN
@@ -109,8 +109,8 @@ BEGIN
   -- 3. Database-level Idempotency Check
   SELECT id, status INTO v_existing_payment
   FROM public.payment_history
-  WHERE company_id = p_company_id 
-    AND (reference = p_reference OR description = 'Moteur Payment: ' || p_reference)
+  WHERE reference = p_reference 
+     OR (company_id = p_company_id AND description = 'Moteur Payment: ' || p_reference)
   LIMIT 1;
 
   IF v_existing_payment.id IS NOT NULL AND v_existing_payment.status = 'paid' THEN
@@ -118,6 +118,16 @@ BEGIN
       'status', 'duplicate',
       'code', 'ALREADY_PROCESSED',
       'message', 'Payment has already been processed and confirmed',
+      'reference', p_reference,
+      'payment_id', v_existing_payment.id
+    );
+  END IF;
+
+  IF v_existing_payment.id IS NOT NULL AND v_existing_payment.status IN ('failed', 'refunded') THEN
+    RETURN jsonb_build_object(
+      'status', 'invalid',
+      'code', 'PAYMENT_ALREADY_TERMINATED',
+      'message', 'Payment has already been marked as ' || v_existing_payment.status || ' and cannot be confirmed',
       'reference', p_reference,
       'payment_id', v_existing_payment.id
     );
@@ -246,8 +256,8 @@ DECLARE
   v_sub_id UUID;
   v_module_ids JSONB;
 BEGIN
-  -- 1. Advisory lock to serialize concurrent operations for this company & reference
-  PERFORM pg_advisory_xact_lock(hashtext('moteur_billing:' || p_company_id::text || ':' || p_reference));
+  -- 1. Advisory lock to serialize concurrent operations for this reference
+  PERFORM pg_advisory_xact_lock(hashtext('moteur_billing:' || p_reference));
 
   -- 2. Parameter validations
   IF p_company_id IS NULL THEN
@@ -262,8 +272,8 @@ BEGIN
   SELECT id, status, created_at, description, amount, currency
   INTO v_payment
   FROM public.payment_history
-  WHERE company_id = p_company_id
-    AND (reference = p_reference OR description = 'Moteur Payment: ' || p_reference)
+  WHERE reference = p_reference
+     OR (company_id = p_company_id AND description = 'Moteur Payment: ' || p_reference)
   ORDER BY created_at DESC
   LIMIT 1;
 

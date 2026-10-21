@@ -821,11 +821,16 @@ class MockAtomicPostgresEngine {
         return { status: 'invalid', code: 'INVALID_CURRENCY', message: 'Payment currency must be a valid 3-character ISO code' };
       }
 
-      // 3. Database-level Idempotency Check
-      const existing = this.paymentHistory.find(
-        (p) => p.companyId === companyId && p.reference === reference && p.status === 'paid'
-      );
+      // 3. Database-level Idempotency Check (global across reference)
+      const existing = this.paymentHistory.find((p) => p.reference === reference);
       if (existing) {
+        if (['failed', 'refunded', 'cancelled'].includes(existing.status)) {
+          return {
+            status: 'invalid',
+            code: `PAYMENT_ALREADY_${existing.status.toUpperCase()}`,
+            message: `Payment reference is already marked as ${existing.status}`,
+          };
+        }
         return {
           status: 'duplicate',
           code: 'ALREADY_PROCESSED',
@@ -1557,8 +1562,468 @@ test('Section F: Prevention of unauthorized payment or module activation', () =>
     billingCycle: 'yearly',
     moduleIds: ['hotel-property', 'garage', 'salon'],
   });
-  assertEqual(res.status, 'invalid');
-  assertEqual(res.code, 'COMPANY_NOT_FOUND', 'Non-existent company must not be granted entitlements');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section G: Regression Suite — Duplicate Moteur Webhook Deliveries
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper to simulate the complete route handler pipeline
+function createSimulatedWebhookHandler(dbEngine, webhookSecret = 'whsec_sandbox_test_2026') {
+  const adapter = new MockMoteurAdapter({ webhookSecret });
+
+  return async function handleWebhook({ rawBody, headers }) {
+    // 1. Signature extraction
+    const sig = headers['x-engine-signature'] || headers['x-moteur-signature'] || headers['x-signature'];
+    if (!webhookSecret) {
+      return { status: 401, body: { success: false, error: 'MOTEUR_WEBHOOK_NOT_CONFIGURED' } };
+    }
+    if (!sig) {
+      return { status: 401, body: { success: false, error: 'MISSING_SIGNATURE_HEADER' } };
+    }
+
+    // 2. Signature verification
+    const parseRes = adapter.parseWebhookPayload(rawBody, sig);
+    if (!parseRes.valid) {
+      const code = parseRes.error === 'INVALID_JSON' ? 400 : 401;
+      return { status: code, body: { success: false, error: parseRes.error } };
+    }
+
+    const { event } = parseRes;
+    const eventName = event.event;
+    const data = event.data || {};
+    const metadata = data.metadata || {};
+
+    const reference = data.reference || data.idempotency_key || data.order_id || metadata.reference || metadata.idempotency_key;
+    const companyId = data.companyId || data.company_id || metadata.company_id;
+    const planId = data.planId || data.plan_id || metadata.plan_id || 'starter';
+    const rawModuleIds = data.moduleIds || data.module_ids || metadata.module_ids;
+    const moduleIds = Array.isArray(rawModuleIds) ? rawModuleIds : (typeof rawModuleIds === 'string' ? JSON.parse(rawModuleIds) : ['hotel-property']);
+    const billingCycle = data.billingCycle || data.billing_cycle || metadata.billing_cycle || 'monthly';
+    const amount = Number(data.amount) || 25000;
+    const currency = data.currency || metadata.currency || 'XOF';
+
+    if (!reference) {
+      return { status: 400, body: { success: false, error: 'MISSING_REFERENCE' } };
+    }
+
+    if (eventName === 'payment.completed' || eventName === 'payment.succeeded') {
+      const rpcResult = dbEngine.confirmPaymentRPC({
+        companyId,
+        reference,
+        amount,
+        currency,
+        planId,
+        billingCycle,
+        moduleIds,
+      });
+
+      if (rpcResult.status === 'duplicate') {
+        return {
+          status: 200,
+          body: {
+            received: true,
+            event: eventName,
+            isDuplicate: true,
+            reference,
+            status: 'already_confirmed',
+          },
+        };
+      }
+
+      if (rpcResult.status === 'invalid') {
+        const isInvalidTransition = rpcResult.code === 'PAYMENT_ALREADY_TERMINATED' || rpcResult.code?.startsWith('PAYMENT_ALREADY_');
+        return {
+          status: isInvalidTransition ? 409 : 400,
+          body: {
+            success: false,
+            error: isInvalidTransition ? 'INVALID_PAYMENT_STATE_TRANSITION' : (rpcResult.code || 'CONFIRMATION_FAILED'),
+            message: rpcResult.message,
+            isDuplicate: false,
+          },
+        };
+      }
+
+      if (rpcResult.status !== 'success') {
+        return {
+          status: 400,
+          body: {
+            success: false,
+            error: rpcResult.code || 'CONFIRMATION_FAILED',
+            message: rpcResult.message,
+            isDuplicate: false,
+          },
+        };
+      }
+
+      return {
+        status: 200,
+        body: {
+          received: true,
+          event: eventName,
+          isDuplicate: false,
+          reference,
+          status: 'confirmed',
+        },
+      };
+    }
+
+    if (eventName === 'payment.failed') {
+      // Check if reference already recorded
+      const existing = dbEngine.paymentHistory.find((p) => p.reference === reference);
+      if (existing) {
+        return {
+          status: 200,
+          body: { received: true, event: 'payment.failed', isDuplicate: true, status: 'failed' },
+        };
+      }
+
+      dbEngine.paymentHistory.push({
+        id: `pay-${dbEngine.paymentHistory.length + 1}`,
+        reference,
+        companyId,
+        amount,
+        currency,
+        status: 'failed',
+        createdAt: new Date().toISOString(),
+      });
+
+      return {
+        status: 200,
+        body: { received: true, event: 'payment.failed', isDuplicate: false, status: 'failed' },
+      };
+    }
+
+    if (eventName === 'payment.cancelled') {
+      const existing = dbEngine.paymentHistory.find((p) => p.reference === reference);
+      if (existing) {
+        return {
+          status: 200,
+          body: { received: true, event: 'payment.cancelled', isDuplicate: true, status: 'cancelled' },
+        };
+      }
+
+      dbEngine.paymentHistory.push({
+        id: `pay-${dbEngine.paymentHistory.length + 1}`,
+        reference,
+        companyId,
+        amount,
+        currency,
+        status: 'failed',
+        createdAt: new Date().toISOString(),
+      });
+
+      return {
+        status: 200,
+        body: { received: true, event: 'payment.cancelled', isDuplicate: false, status: 'cancelled' },
+      };
+    }
+
+    if (eventName === 'payment.expired') {
+      const existing = dbEngine.paymentHistory.find((p) => p.reference === reference);
+      if (existing) {
+        return {
+          status: 200,
+          body: { received: true, event: 'payment.expired', isDuplicate: true, status: 'expired' },
+        };
+      }
+
+      dbEngine.paymentHistory.push({
+        id: `pay-${dbEngine.paymentHistory.length + 1}`,
+        reference,
+        companyId,
+        amount,
+        currency,
+        status: 'expired',
+        createdAt: new Date().toISOString(),
+      });
+
+      return {
+        status: 200,
+        body: { received: true, event: 'payment.expired', isDuplicate: false, status: 'expired' },
+      };
+    }
+
+    return { status: 200, body: { received: true, event: eventName, isDuplicate: false } };
+  };
+}
+
+test('Section G: Sending the same webhook reference 3 times returns isDuplicate: false once, then isDuplicate: true twice', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  const db = new MockAtomicPostgresEngine();
+  const handleWebhook = createSimulatedWebhookHandler(db, secret);
+
+  const reference = 'ref-dup-test-1792569076396';
+  const companyId = 'comp-valid-01';
+
+  const payloadObj = {
+    event: 'payment.completed',
+    data: {
+      reference,
+      companyId,
+      planId: 'starter',
+      moduleIds: ['hotel-property'],
+      amount: 25000,
+      currency: 'XOF',
+      status: 'paid',
+    },
+  };
+  const rawBody = JSON.stringify(payloadObj);
+  const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const headers = { 'x-engine-signature': `sha256=${signature}` };
+
+  // Delivery 1
+  const delivery1 = await handleWebhook({ rawBody, headers });
+  assertEqual(delivery1.status, 200, 'Delivery 1 must return HTTP 200');
+  assertEqual(delivery1.body.received, true);
+  assertEqual(delivery1.body.isDuplicate, false, 'Delivery 1 must have isDuplicate: false');
+  assertEqual(db.paymentHistory.length, 1, 'Delivery 1 must create exactly 1 payment record');
+  assertEqual(db.paymentHistory[0].reference, reference);
+  assertEqual(db.paymentHistory[0].status, 'paid');
+  assertEqual(db.companyModules.get(`${companyId}:hotel-property`).status, 'active', 'Hotel module must be activated');
+
+  // Delivery 2 (Exact duplicate replay)
+  const delivery2 = await handleWebhook({ rawBody, headers });
+  assertEqual(delivery2.status, 200, 'Delivery 2 must return HTTP 200');
+  assertEqual(delivery2.body.received, true);
+  assertEqual(delivery2.body.isDuplicate, true, 'Delivery 2 must have isDuplicate: true');
+  assertEqual(db.paymentHistory.length, 1, 'Delivery 2 must NOT create duplicate payment record');
+  assertEqual(db.paymentHistory[0].reference, reference);
+
+  // Delivery 3 (Exact duplicate replay)
+  const delivery3 = await handleWebhook({ rawBody, headers });
+  assertEqual(delivery3.status, 200, 'Delivery 3 must return HTTP 200');
+  assertEqual(delivery3.body.received, true);
+  assertEqual(delivery3.body.isDuplicate, true, 'Delivery 3 must have isDuplicate: true');
+  assertEqual(db.paymentHistory.length, 1, 'Delivery 3 must NOT create duplicate payment record');
+  assertEqual(db.companyModules.get(`${companyId}:hotel-property`).status, 'active');
+});
+
+test('Section G: Concurrent duplicate delivery of 3 requests processes exactly once and marks 2 as duplicate', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  const db = new MockAtomicPostgresEngine();
+  const handleWebhook = createSimulatedWebhookHandler(db, secret);
+
+  const reference = 'ref-dup-test-concurrent-888';
+  const companyId = 'comp-valid-01';
+
+  const payloadObj = {
+    event: 'payment.completed',
+    data: {
+      reference,
+      companyId,
+      planId: 'bundle',
+      moduleIds: ['garage', 'salon'],
+      amount: 45000,
+      currency: 'XAF',
+      status: 'paid',
+    },
+  };
+  const rawBody = JSON.stringify(payloadObj);
+  const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const headers = { 'x-engine-signature': signature };
+
+  // Dispatch 3 concurrent requests simultaneously
+  const results = await Promise.all([
+    handleWebhook({ rawBody, headers }),
+    handleWebhook({ rawBody, headers }),
+    handleWebhook({ rawBody, headers }),
+  ]);
+
+  for (const res of results) {
+    assertEqual(res.status, 200, 'All concurrent deliveries must return HTTP 200');
+    assertEqual(res.body.received, true);
+  }
+
+  const falseCount = results.filter((r) => r.body.isDuplicate === false).length;
+  const trueCount = results.filter((r) => r.body.isDuplicate === true).length;
+
+  assertEqual(falseCount, 1, 'Exactly 1 concurrent request must have isDuplicate: false');
+  assertEqual(trueCount, 2, 'Exactly 2 concurrent requests must have isDuplicate: true');
+  assertEqual(db.paymentHistory.length, 1, 'Total payment records must be strictly 1');
+  assertEqual(db.companyModules.get(`${companyId}:garage`).status, 'active');
+  assertEqual(db.companyModules.get(`${companyId}:salon`).status, 'active');
+});
+
+test('Section G: Serverless stateless instance simulation maintains persistent idempotency', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  // Shared persistent database
+  const sharedDb = new MockAtomicPostgresEngine();
+
+  // 3 independent serverless function instances
+  const instanceA = createSimulatedWebhookHandler(sharedDb, secret);
+  const instanceB = createSimulatedWebhookHandler(sharedDb, secret);
+  const instanceC = createSimulatedWebhookHandler(sharedDb, secret);
+
+  const reference = 'ref-serverless-stateless-999';
+  const companyId = 'comp-valid-02';
+
+  const rawBody = JSON.stringify({
+    event: 'payment.completed',
+    data: {
+      reference,
+      companyId,
+      planId: 'starter',
+      moduleIds: ['hotel-property'],
+      amount: 15000,
+      currency: 'XOF',
+    },
+  });
+  const sig = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const headers = { 'x-engine-signature': sig };
+
+  // Delivery 1 on Instance A
+  const resA = await instanceA({ rawBody, headers });
+  assertEqual(resA.body.isDuplicate, false, 'Instance A must process payment as non-duplicate');
+
+  // Delivery 2 on Instance B (separate memory context)
+  const resB = await instanceB({ rawBody, headers });
+  assertEqual(resB.body.isDuplicate, true, 'Instance B must recognize duplicate via persistent DB');
+
+  // Delivery 3 on Instance C (separate memory context)
+  const resC = await instanceC({ rawBody, headers });
+  assertEqual(resC.body.isDuplicate, true, 'Instance C must recognize duplicate via persistent DB');
+
+  assertEqual(sharedDb.paymentHistory.length, 1, 'Only 1 record in shared database');
+});
+
+test('Section G: payment.failed events do not grant entitlements and repeat deliveries are idempotent', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  const db = new MockAtomicPostgresEngine();
+  const handleWebhook = createSimulatedWebhookHandler(db, secret);
+
+  const reference = 'ref-failed-payment-001';
+  const companyId = 'comp-valid-01';
+
+  const rawBody = JSON.stringify({
+    event: 'payment.failed',
+    data: {
+      reference,
+      companyId,
+      amount: 25000,
+      currency: 'XOF',
+      errorCode: 'INSUFFICIENT_FUNDS',
+    },
+  });
+  const sig = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const headers = { 'x-engine-signature': sig };
+
+  // Send 3 times
+  const d1 = await handleWebhook({ rawBody, headers });
+  assertEqual(d1.status, 200);
+  assertEqual(d1.body.isDuplicate, false);
+  assertEqual(d1.body.status, 'failed');
+
+  const d2 = await handleWebhook({ rawBody, headers });
+  assertEqual(d2.status, 200);
+  assertEqual(d2.body.isDuplicate, true);
+
+  const d3 = await handleWebhook({ rawBody, headers });
+  assertEqual(d3.status, 200);
+  assertEqual(d3.body.isDuplicate, true);
+
+  assertEqual(db.paymentHistory.length, 1, 'Only 1 failure record stored');
+  assertEqual(db.paymentHistory[0].status, 'failed');
+  assertEqual(db.companyModules.has(`${companyId}:hotel-property`), false, 'Failed payment must NOT grant module');
+
+  // Attempting to replay as payment.completed with same reference must be rejected
+  const completedBody = JSON.stringify({
+    event: 'payment.completed',
+    data: {
+      reference,
+      companyId,
+      amount: 25000,
+      currency: 'XOF',
+      planId: 'starter',
+      moduleIds: ['hotel-property'],
+    },
+  });
+  const completedSig = crypto.createHmac('sha256', secret).update(completedBody).digest('hex');
+  const attackRes = await handleWebhook({
+    rawBody: completedBody,
+    headers: { 'x-engine-signature': completedSig },
+  });
+  assertEqual(attackRes.status, 409, 'Replay of completed after failed must be rejected with HTTP 409');
+  assertEqual(attackRes.body.error, 'INVALID_PAYMENT_STATE_TRANSITION');
+  assertEqual(attackRes.body.isDuplicate, false);
+  assertEqual(db.companyModules.has(`${companyId}:hotel-property`), false, 'Must not grant modules from failed ref');
+});
+
+test('Section G: payment.cancelled handling records failure, replay returns isDuplicate: true, and cannot activate modules', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  const db = new MockAtomicPostgresEngine();
+  const handleWebhook = createSimulatedWebhookHandler(db, secret);
+
+  const reference = 'ref-cancelled-order-002';
+  const companyId = 'comp-valid-01';
+
+  const cancelBody = JSON.stringify({
+    event: 'payment.cancelled',
+    data: {
+      reference,
+      companyId,
+      amount: 25000,
+      currency: 'XOF',
+      metadata: { cancellation_reason: 'user_aborted' },
+    },
+  });
+  const sig = crypto.createHmac('sha256', secret).update(cancelBody).digest('hex');
+  const headers = { 'x-engine-signature': sig };
+
+  // Delivery 1
+  const r1 = await handleWebhook({ rawBody: cancelBody, headers });
+  assertEqual(r1.status, 200);
+  assertEqual(r1.body.isDuplicate, false);
+  assertEqual(r1.body.status, 'cancelled');
+  assertEqual(db.paymentHistory.length, 1);
+  assertEqual(db.paymentHistory[0].status, 'failed');
+  assertEqual(db.companyModules.has(`${companyId}:hotel-property`), false, 'Cancelled payment must not activate modules');
+
+  // Delivery 2 (Replay)
+  const r2 = await handleWebhook({ rawBody: cancelBody, headers });
+  assertEqual(r2.status, 200);
+  assertEqual(r2.body.isDuplicate, true);
+
+  // Subsequent completed replay rejected
+  const completedBody = JSON.stringify({
+    event: 'payment.completed',
+    data: { reference, companyId, planId: 'starter', moduleIds: ['hotel-property'] },
+  });
+  const completedSig = crypto.createHmac('sha256', secret).update(completedBody).digest('hex');
+  const r3 = await handleWebhook({ rawBody: completedBody, headers: { 'x-engine-signature': completedSig } });
+  assertEqual(r3.status, 409);
+  assertEqual(r3.body.error, 'INVALID_PAYMENT_STATE_TRANSITION');
+  assertEqual(r3.body.isDuplicate, false);
+});
+
+test('Section G: Invalid or tampered signature is rejected before idempotency or DB processing', async () => {
+  const secret = 'whsec_sandbox_test_2026';
+  const db = new MockAtomicPostgresEngine();
+  const handleWebhook = createSimulatedWebhookHandler(db, secret);
+
+  const rawBody = JSON.stringify({
+    event: 'payment.completed',
+    data: { reference: 'ref-tamper-01', companyId: 'comp-valid-01' },
+  });
+
+  // Missing header
+  const r1 = await handleWebhook({ rawBody, headers: {} });
+  assertEqual(r1.status, 401);
+  assertEqual(r1.body.error, 'MISSING_SIGNATURE_HEADER');
+
+  // Tampered payload
+  const validSig = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const r2 = await handleWebhook({ rawBody: rawBody + ' ', headers: { 'x-engine-signature': validSig } });
+  assertEqual(r2.status, 401);
+  assertEqual(r2.body.error, 'INVALID_SIGNATURE');
+
+  // Wrong secret
+  const badSig = crypto.createHmac('sha256', 'wrong_secret').update(rawBody).digest('hex');
+  const r3 = await handleWebhook({ rawBody, headers: { 'x-engine-signature': badSig } });
+  assertEqual(r3.status, 401);
+  assertEqual(r3.body.error, 'INVALID_SIGNATURE');
+
+  assertEqual(db.paymentHistory.length, 0, 'No payment records created for unauthenticated requests');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -8,11 +8,13 @@ export function createAdminClient(): SupabaseClient<Database> | null {
   if (typeof window !== 'undefined') {
     return null;
   }
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) {
     return null;
   }
   if (!adminClient) {
-    adminClient = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    adminClient = createClient<Database>(url, serviceKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false,
