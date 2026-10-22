@@ -194,9 +194,21 @@ export async function startCheckout(params: CheckoutParams): Promise<{
   // If in browser, invoke server checkout route
   if (typeof window !== 'undefined') {
     try {
+      const { getSession } = await import('./auth');
+      const session = await getSession();
+      const token = session?.token;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const res = await fetch('/api/v1/billing/checkout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers,
         body: JSON.stringify({
           companyId: params.companyId,
           planId: params.planId,

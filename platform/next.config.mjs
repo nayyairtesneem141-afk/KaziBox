@@ -11,6 +11,14 @@ const nextConfig = {
   experimental: {
     webpackBuildWorker: false,
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/webhooks/moteur',
+        destination: '/api/v1/webhooks/moteur',
+      },
+    ];
+  },
 };
 
 export default nextConfig;

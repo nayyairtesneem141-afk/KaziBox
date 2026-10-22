@@ -156,7 +156,9 @@ function BillingPageContent() {
     let isMounted = true;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(pendingReference)}`);
+        const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(pendingReference)}`, {
+          credentials: 'include',
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (!isMounted) return;

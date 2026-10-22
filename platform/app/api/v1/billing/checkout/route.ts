@@ -17,26 +17,6 @@ export const dynamic = 'force-dynamic';
  * - Session status starts as PENDING. Paid access is NEVER granted here.
  */
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(req);
-  if (!session) {
-    return NextResponse.json(
-      { success: false, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' },
-      { status: 401 }
-    );
-  }
-
-  if (!isPrivilegedRole(session)) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Forbidden',
-        code: 'INSUFFICIENT_ROLE',
-        message: 'Only workspace owners or platform administrators can initiate billing checkout.',
-      },
-      { status: 403 }
-    );
-  }
-
   let body: any;
   try {
     body = await req.json();
@@ -56,7 +36,39 @@ export async function POST(req: NextRequest) {
     amount,
     referralCode,
     customer,
-  } = body;
+  } = body || {};
+
+  const session = await getServerSession(req, companyId);
+  if (!session) {
+    const unauthSession = await getServerSession(req);
+    if (!unauthSession) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' },
+        { status: 401 }
+      );
+    }
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Forbidden',
+        code: 'COMPANY_MISMATCH',
+        message: 'Vous n’avez pas accès à cet espace de travail pour initier la facturation.',
+      },
+      { status: 403 }
+    );
+  }
+
+  if (!isPrivilegedRole(session)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Forbidden',
+        code: 'INSUFFICIENT_ROLE',
+        message: 'Only workspace owners or platform administrators can initiate billing checkout.',
+      },
+      { status: 403 }
+    );
+  }
 
   const targetCompanyId = session.role === 'platform_admin' && companyId ? companyId : session.companyId;
 
@@ -66,6 +78,9 @@ export async function POST(req: NextRequest) {
       { status: 403 }
     );
   }
+
+  // Sanitized audit log (never prints tokens or secrets)
+  console.log(`[Billing Checkout] Initiated for company ${targetCompanyId.slice(0, 8)}... by user ${session.userId.slice(0, 8)}... (plan: ${planId}, cycle: ${billingCycle})`);
 
   if (!planId || !billingCycle || !amount) {
     return NextResponse.json(

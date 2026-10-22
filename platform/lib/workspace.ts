@@ -74,44 +74,26 @@ export async function createWorkspace(params: {
   language?: string;
   logo_url?: string;
 }): Promise<{ data: Workspace | null; error: Error | null }> {
-  if (isSupabaseConfigured() && typeof window !== 'undefined') {
-    const supabase: any = createBrowserClient();
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('companies')
-        .insert({
-          name: params.name.trim(),
-          country: params.country,
-          currency: params.currency,
-          language: params.language || 'fr',
-          logo_url: params.logo_url || null,
-          plan: 'starter',
-          status: 'active',
-        })
-        .select()
-        .single();
-
-      if (error || !data) {
-        return { data: null, error: new Error(error?.message || 'Erreur lors de la création de la société') };
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        return {
+          data: null,
+          error: new Error(json.message || json.error || 'Erreur lors de la création de la société'),
+        };
       }
-
-      const newWorkspace: Workspace = {
-        id: data.id,
-        company_id: data.id,
-        name: data.name,
-        country: data.country,
-        currency: data.currency,
-        language: data.language,
-        logo_url: data.logo_url || '',
-        created_at: data.created_at,
-        plan: data.plan as Workspace['plan'],
-        status: data.status as Workspace['status'],
-      };
+      const newWorkspace: Workspace = json.workspace;
 
       const session = await getSession();
-      if (session && typeof window !== 'undefined') {
+      if (session) {
         session.workspace = newWorkspace;
-        session.user.company_id = data.id;
+        session.user.company_id = newWorkspace.company_id;
         localStorage.setItem('kazibox_current_session', JSON.stringify(session));
         document.cookie = `kazibox_session=${encodeURIComponent(
           JSON.stringify({ userId: session.user.id, companyId: newWorkspace.company_id })
@@ -119,6 +101,8 @@ export async function createWorkspace(params: {
       }
 
       return { data: newWorkspace, error: null };
+    } catch (err: any) {
+      return { data: null, error: new Error(err?.message || 'Erreur réseau') };
     }
   }
 

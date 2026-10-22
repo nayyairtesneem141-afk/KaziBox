@@ -39,7 +39,7 @@ function HairSalonContent() {
   const { workspace, user } = useSession();
   const { t, language } = useTranslation();
   const { isReadOnly } = useModuleAccess();
-  const companyId = workspace?.company_id || '11111111-1111-4111-8111-111111111111';
+  const companyId = workspace?.company_id || workspace?.id;
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<'dashboard' | 'appointments' | 'customers' | 'services' | 'staff' | 'reports'>('dashboard');
@@ -111,6 +111,7 @@ function HairSalonContent() {
   };
 
   const loadData = async () => {
+    if (!companyId) return;
     setLoading(true);
     try {
       const [aptsData, custsData, staffData, srvsData, mData, rData] = await Promise.all([
@@ -205,6 +206,7 @@ function HairSalonContent() {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -235,6 +237,7 @@ function HairSalonContent() {
 
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -263,6 +266,7 @@ function HairSalonContent() {
 
   const handleCreateService = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -290,6 +294,7 @@ function HairSalonContent() {
 
   const handleCreateAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -320,6 +325,7 @@ function HairSalonContent() {
   };
 
   const handleStatusChange = async (appointmentId: string, newStatus: SalonAppointment['status']) => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -334,6 +340,7 @@ function HairSalonContent() {
   };
 
   const openPaymentModal = (apt: SalonAppointment) => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -347,6 +354,7 @@ function HairSalonContent() {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast(t('billing.read_only_action_disabled'), 'error');
       return;
@@ -384,6 +392,14 @@ function HairSalonContent() {
       return matchSearch && matchDate && matchStaff && matchStatus;
     });
   }, [appointments, searchTerm, dateFilter, staffFilter, statusFilter]);
+
+  if (!companyId || (loading && !metrics)) {
+    return (
+      <div className="min-h-[400px] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-pink-600 border-t-transparent rounded-full animate-spin mb-4" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] pb-24 text-[#1F2937]">

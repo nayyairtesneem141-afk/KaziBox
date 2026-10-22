@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { Card, Button, Badge, Modal } from '@kazibox/ui';
 import { useTranslation, localize } from '@/lib/i18n';
@@ -41,7 +41,7 @@ function GarageModuleContent() {
   const { user, workspace } = useSession();
   const { isReadOnly } = useModuleAccess();
 
-  const companyId = workspace?.company_id || workspace?.id || '22222222-2222-4222-8222-222222222222';
+  const companyId = workspace?.company_id || workspace?.id;
   const role = user?.role || 'worker';
   const isOwner = role === 'owner' || role === 'platform_admin';
 
@@ -118,6 +118,14 @@ function GarageModuleContent() {
   const [newItemQty, setNewItemQty] = useState('1');
   const [newItemPrice, setNewItemPrice] = useState('10000');
 
+  // Submission Locking States & Stale Async Protection
+  const [isSubmittingItem, setIsSubmittingItem] = useState(false);
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const selectedJobForDetailRef = useRef<GarageJob | null>(null);
+  selectedJobForDetailRef.current = selectedJobForDetail;
+  const loadSeqRef = useRef(0);
+
   const showToast = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4000);
@@ -125,6 +133,8 @@ function GarageModuleContent() {
 
   // Load all backend data
   const loadData = async () => {
+    if (!companyId) return;
+    const currentSeq = ++loadSeqRef.current;
     setLoading(true);
     try {
       const [cData, vData, jData, mData, rData] = await Promise.all([
@@ -134,26 +144,43 @@ function GarageModuleContent() {
         getGarageMetrics(companyId),
         getGarageReports(companyId),
       ]);
+
+      // Guard against stale asynchronous responses overwriting newer job state
+      if (currentSeq !== loadSeqRef.current) return;
+
       setCustomers(cData);
       setVehicles(vData);
       setJobs(jData);
       setMetrics(mData);
       setReports(rData);
 
-      // If a job detail modal is open, refresh its details
-      if (selectedJobForDetail) {
-        const refreshed = await getGarageJobById(companyId, selectedJobForDetail.id);
-        if (refreshed) setSelectedJobForDetail(refreshed);
+      // If a job detail modal is open, refresh its details authoritatively
+      const activeJobId = selectedJobForDetailRef.current?.id;
+      if (activeJobId) {
+        try {
+          const refreshed = await getGarageJobById(companyId, activeJobId);
+          if (refreshed && currentSeq === loadSeqRef.current) {
+            setSelectedJobForDetail((prev) => (prev && prev.id === activeJobId ? refreshed : prev));
+          }
+        } catch {
+          // Preserve valid displayed data without discarding on refresh failure
+        }
       }
     } catch {
-      showToast('error', 'Erreur lors du chargement des données Garage.');
+      if (currentSeq === loadSeqRef.current) {
+        showToast('error', 'Erreur lors du chargement des données Garage.');
+      }
     } finally {
-      setLoading(false);
+      if (currentSeq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadData();
+    if (companyId) {
+      loadData();
+    }
   }, [companyId]);
 
   // Vehicles filtered by selected customer in New Job modal
@@ -208,6 +235,7 @@ function GarageModuleContent() {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -239,6 +267,7 @@ function GarageModuleContent() {
 
   const handleCreateVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -277,6 +306,7 @@ function GarageModuleContent() {
 
   const handleCreateJob = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -314,58 +344,121 @@ function GarageModuleContent() {
   };
 
   const handleStatusChange = async (jobId: string, status: GarageJob['status']) => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
     }
-    const res = await updateGarageJobStatus(companyId, jobId, status);
-    if (res.success) {
-      showToast('success', `Statut mis à jour vers "${status}" !`);
-      loadData();
-      if (selectedJobForDetail && selectedJobForDetail.id === jobId) {
-        setSelectedJobForDetail((prev) => (prev ? { ...prev, status } : null));
+    if (isUpdatingStatus) return;
+
+    setIsUpdatingStatus(true);
+    try {
+      const res = await updateGarageJobStatus(companyId, jobId, status);
+      if (res.success) {
+        showToast('success', `Statut mis à jour vers "${status}" !`);
+        setSelectedJobForDetail((prev) => (prev && prev.id === jobId ? { ...prev, status } : prev));
+        setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status } : j)));
+        loadData();
+      } else {
+        showToast('error', res.error || 'Erreur mise à jour statut');
       }
-    } else {
-      showToast('error', res.error || 'Erreur mise à jour statut');
+    } catch (err: any) {
+      showToast('error', err?.message || 'Erreur mise à jour statut');
+    } finally {
+      setIsUpdatingStatus(false);
     }
   };
 
   const handleAddItemToJob = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
     }
     if (!selectedJobForDetail) return;
+    if (isSubmittingItem) return;
+
     if (!newItemName.trim()) {
       showToast('error', 'Nom du service/pièce obligatoire.');
       return;
     }
-    const res = await addGarageJobItem(companyId, selectedJobForDetail.id, {
-      item_type: newItemType,
-      name: newItemName.trim(),
-      quantity: parseFloat(newItemQty) || 1,
-      unit_price: parseFloat(newItemPrice) || 0,
-    });
-    if (res.success) {
-      showToast('success', 'Ligne ajoutée avec succès !');
-      setIsAddItemModalOpen(false);
-      setNewItemName('');
-      setNewItemQty('1');
-      setNewItemPrice('10000');
-      loadData();
-    } else {
-      showToast('error', res.error || 'Erreur ajout ligne');
+    const qty = parseFloat(newItemQty) || 1;
+    const price = parseFloat(newItemPrice) || 0;
+    if (qty <= 0) {
+      showToast('error', 'La quantité doit être supérieure à zéro.');
+      return;
+    }
+    if (price < 0) {
+      showToast('error', 'Le prix unitaire ne peut être négatif.');
+      return;
+    }
+
+    const currentJobId = selectedJobForDetail.id;
+    setIsSubmittingItem(true);
+    try {
+      const res = await addGarageJobItem(companyId, currentJobId, {
+        item_type: newItemType,
+        name: newItemName.trim(),
+        quantity: qty,
+        unit_price: price,
+      });
+
+      if (res.success) {
+        showToast('success', 'Ligne ajoutée avec succès !');
+        setIsAddItemModalOpen(false);
+        setNewItemName('');
+        setNewItemQty('1');
+        setNewItemPrice('10000');
+
+        // Authoritatively update modal state: prefer returned job if complete, otherwise fetch
+        let authoritativeJob = res.job;
+        if (!authoritativeJob || !authoritativeJob.items) {
+          authoritativeJob = (await getGarageJobById(companyId, currentJobId)) || undefined;
+        }
+
+        if (authoritativeJob) {
+          setSelectedJobForDetail((prev) => (prev && prev.id === currentJobId ? authoritativeJob! : prev));
+          setJobs((prev) => prev.map((j) => (j.id === currentJobId ? authoritativeJob! : j)));
+        } else if (res.item) {
+          const addedItem = res.item;
+          setSelectedJobForDetail((prev) => {
+            if (!prev || prev.id !== currentJobId) return prev;
+            const updatedItems = [...(prev.items || []), addedItem];
+            const newTotal = updatedItems.reduce((sum, it) => sum + Number(it.total), 0);
+            const paid = Number(prev.paid_amount || 0);
+            const outstanding = Math.max(0, newTotal - paid);
+            return {
+              ...prev,
+              items: updatedItems,
+              total_amount: newTotal,
+              outstanding_amount: outstanding,
+              payment_status: outstanding === 0 ? 'paid' : paid > 0 ? 'partially_paid' : 'unpaid',
+            };
+          });
+        }
+
+        loadData();
+      } else {
+        showToast('error', res.error || 'Erreur ajout ligne');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Erreur ajout ligne');
+    } finally {
+      setIsSubmittingItem(false);
     }
   };
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
     }
     if (!selectedJobForDetail) return;
+    if (isSubmittingPayment) return;
+
     const amt = parseFloat(paymentAmount);
     if (isNaN(amt) || amt <= 0) {
       showToast('error', 'Montant de règlement invalide (> 0).');
@@ -376,24 +469,66 @@ function GarageModuleContent() {
       return;
     }
 
-    const res = await recordGaragePayment(companyId, selectedJobForDetail.id, {
-      amount: amt,
-      payment_method: paymentMethod,
-      reference: paymentReference.trim() || undefined,
-      notes: paymentNotes.trim() || undefined,
-    });
+    const currentJobId = selectedJobForDetail.id;
+    setIsSubmittingPayment(true);
+    try {
+      const res = await recordGaragePayment(companyId, currentJobId, {
+        amount: amt,
+        payment_method: paymentMethod,
+        reference: paymentReference.trim() || undefined,
+        notes: paymentNotes.trim() || undefined,
+      });
 
-    if (res.success) {
-      showToast('success', `Règlement de ${amt.toLocaleString()} XOF enregistré avec succès !`);
-      setIsPaymentModalOpen(false);
-      setPaymentAmount('0');
-      setPaymentReference('');
-      setPaymentNotes('');
-      loadData();
-    } else {
-      showToast('error', res.error || 'Erreur enregistrement paiement');
+      if (res.success) {
+        showToast('success', `Règlement de ${amt.toLocaleString()} XOF enregistré avec succès !`);
+        setIsPaymentModalOpen(false);
+        setPaymentAmount('0');
+        setPaymentReference('');
+        setPaymentNotes('');
+
+        // Authoritatively update modal state with latest persisted job data
+        try {
+          const authoritativeJob = await getGarageJobById(companyId, currentJobId);
+          if (authoritativeJob) {
+            setSelectedJobForDetail((prev) => (prev && prev.id === currentJobId ? authoritativeJob : prev));
+            setJobs((prev) => prev.map((j) => (j.id === currentJobId ? authoritativeJob : j)));
+          } else if (res.payment) {
+            const newPayment = res.payment;
+            setSelectedJobForDetail((prev) => {
+              if (!prev || prev.id !== currentJobId) return prev;
+              const newPaid = prev.paid_amount + amt;
+              const newOutstanding = Math.max(0, prev.total_amount - newPaid);
+              return {
+                ...prev,
+                paid_amount: newPaid,
+                outstanding_amount: newOutstanding,
+                payment_status: newOutstanding === 0 ? 'paid' : 'partially_paid',
+                payments: [newPayment, ...(prev.payments || [])],
+              };
+            });
+          }
+        } catch {
+          // If refresh fails, preserve existing valid displayed data without discarding
+        }
+
+        loadData();
+      } else {
+        showToast('error', res.error || 'Erreur enregistrement paiement');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Erreur enregistrement paiement');
+    } finally {
+      setIsSubmittingPayment(false);
     }
   };
+
+  if (!companyId || (loading && !metrics)) {
+    return (
+      <div className="min-h-[400px] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-amber-600 border-t-transparent rounded-full animate-spin mb-4" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
@@ -1463,7 +1598,7 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2"
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || isUpdatingStatus}
                   title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'diagnosing')}
                 >
@@ -1473,7 +1608,7 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-amber-800 bg-amber-50 border-amber-300"
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || isUpdatingStatus}
                   title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'in_progress')}
                 >
@@ -1483,7 +1618,7 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-red-800 bg-red-50 border-red-300"
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || isUpdatingStatus}
                   title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'waiting_parts')}
                 >
@@ -1493,7 +1628,7 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2 text-green-800 bg-green-50 border-green-300 font-bold"
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || isUpdatingStatus}
                   title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'completed')}
                 >
@@ -1503,7 +1638,7 @@ function GarageModuleContent() {
                   variant="outline"
                   size="sm"
                   className="text-xs py-1 px-2"
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || isUpdatingStatus}
                   title={isReadOnly ? t('billing.read_only_action_disabled') : undefined}
                   onClick={() => handleStatusChange(selectedJobForDetail.id, 'delivered')}
                 >
@@ -1705,8 +1840,14 @@ function GarageModuleContent() {
               <Button variant="outline" size="sm" type="button" onClick={() => setIsPaymentModalOpen(false)}>
                 Annuler
               </Button>
-              <Button variant="primary" size="sm" type="submit" className="bg-green-600 hover:bg-green-700 text-white">
-                Valider l’encaissement
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                disabled={isReadOnly || isSubmittingPayment}
+                className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
+              >
+                {isSubmittingPayment ? 'Enregistrement...' : 'Valider l’encaissement'}
               </Button>
             </div>
           </form>
@@ -1781,8 +1922,14 @@ function GarageModuleContent() {
               <Button variant="outline" size="sm" type="button" onClick={() => setIsAddItemModalOpen(false)}>
                 Annuler
               </Button>
-              <Button variant="primary" size="sm" type="submit" className="bg-amber-600 hover:bg-amber-700 text-white">
-                Ajouter à l’OR
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                disabled={isReadOnly || isSubmittingItem}
+                className="bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50"
+              >
+                {isSubmittingItem ? 'Ajout en cours...' : 'Ajouter à l’OR'}
               </Button>
             </div>
           </form>

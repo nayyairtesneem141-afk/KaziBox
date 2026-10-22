@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireServerAuth } from '@/lib/server-auth';
 import {
   getGarageJobs,
+  getGarageJobById,
   createGarageJob,
   updateGarageJobStatus,
   addGarageJobItem,
@@ -20,6 +21,16 @@ export async function GET(req: NextRequest) {
   if (auth.errorResponse) return auth.errorResponse;
 
   const companyId = auth.session.companyId;
+  const jobId = searchParams.get('jobId');
+
+  if (jobId) {
+    const job = await getGarageJobById(companyId, jobId);
+    if (!job) {
+      return NextResponse.json({ success: false, error: 'Ordre de réparation introuvable' }, { status: 404 });
+    }
+    return NextResponse.json({ success: true, job });
+  }
+
   const filterStatus = searchParams.get('status') || undefined;
   const search = searchParams.get('search') || undefined;
 
@@ -49,7 +60,8 @@ export async function POST(req: NextRequest) {
     if (!itemResult.success) {
       return NextResponse.json({ success: false, error: itemResult.error }, { status: 422 });
     }
-    return NextResponse.json({ success: true, item: itemResult.item });
+    const updatedJob = await getGarageJobById(companyId, body.job_id);
+    return NextResponse.json({ success: true, item: itemResult.item, job: updatedJob });
   }
 
   const result = await createGarageJob(companyId, body);

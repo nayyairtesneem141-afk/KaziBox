@@ -36,7 +36,7 @@ function HotelModuleContent() {
   const { user, workspace } = useSession();
   const { isReadOnly } = useModuleAccess();
 
-  const companyId = workspace?.id || '11111111-1111-4111-8111-111111111111';
+  const companyId = workspace?.company_id || workspace?.id;
   const role = user?.role || 'worker';
   const isOwner = role === 'owner' || role === 'platform_admin';
 
@@ -103,6 +103,7 @@ function HotelModuleContent() {
 
   // Load backend data from real Supabase tables
   const loadData = async () => {
+    if (!companyId) return;
     setLoading(true);
     try {
       const [rData, gData, resData, mData] = await Promise.all([
@@ -123,7 +124,9 @@ function HotelModuleContent() {
   };
 
   useEffect(() => {
-    loadData();
+    if (companyId) {
+      loadData();
+    }
   }, [companyId]);
 
   // Calculated auto price for reservation creation
@@ -139,6 +142,7 @@ function HotelModuleContent() {
   // Handlers for creating Room
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -170,6 +174,7 @@ function HotelModuleContent() {
   // Handlers for creating Guest
   const handleCreateGuest = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -202,6 +207,7 @@ function HotelModuleContent() {
   // Handlers for creating Reservation
   const handleCreateReservation = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -238,6 +244,7 @@ function HotelModuleContent() {
 
   // Quick Room Status change
   const handleRoomStatusChange = async (roomId: string, newStatus: HotelRoom['status']) => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -253,6 +260,7 @@ function HotelModuleContent() {
 
   // Execute Check-in
   const handleConfirmCheckIn = async () => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -278,6 +286,7 @@ function HotelModuleContent() {
 
   // Execute Check-out
   const handleConfirmCheckOut = async () => {
+    if (!companyId) return;
     if (isReadOnly) {
       showToast('error', t('billing.read_only_action_disabled'));
       return;
@@ -360,7 +369,7 @@ function HotelModuleContent() {
     );
   }, [guests, guestSearch]);
 
-  if (loading && !metrics) {
+  if (!companyId || (loading && !metrics)) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
         <div className="w-10 h-10 border-4 border-[#6D28D9] border-t-transparent rounded-full animate-spin" />

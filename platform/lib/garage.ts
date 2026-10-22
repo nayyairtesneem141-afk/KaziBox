@@ -825,6 +825,17 @@ export async function getGarageJobById(
 ): Promise<GarageJob | null> {
   const companyId = ensureUuidCompanyId(companyIdInput);
 
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`/api/v1/garage/jobs?companyId=${encodeURIComponent(companyId)}&jobId=${encodeURIComponent(jobId)}`);
+      const json = await res.json();
+      if (res.ok && json.success && json.job) return json.job;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   const supabase = getSupabase();
   if (supabase) {
     const [jobRes, itemsRes, paymentsRes] = await Promise.all([
@@ -1095,7 +1106,7 @@ export async function addGarageJobItem(
   companyIdInput: string,
   jobId: string,
   item: { item_type: 'service' | 'part'; name: string; quantity: number; unit_price: number; notes?: string }
-): Promise<{ success: boolean; item?: GarageJobItem; error?: string }> {
+): Promise<{ success: boolean; item?: GarageJobItem; job?: GarageJob; error?: string }> {
   const companyId = ensureUuidCompanyId(companyIdInput);
 
   if (!item.name || !item.name.trim()) {
@@ -1106,6 +1117,26 @@ export async function addGarageJobItem(
   }
   if (item.unit_price < 0) {
     return { success: false, error: 'Le prix unitaire ne peut être négatif.' };
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/v1/garage/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_item',
+          company_id: companyId,
+          job_id: jobId,
+          item,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) return { success: true, item: json.item, job: json.job };
+      return { success: false, error: json.error || 'Erreur lors de l’ajout de la prestation.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur réseau.' };
+    }
   }
 
   const itemTotal = Number(item.quantity) * Number(item.unit_price);

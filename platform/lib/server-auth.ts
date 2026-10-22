@@ -49,94 +49,108 @@ export async function getServerSession(
 ): Promise<ServerUserSession | null> {
   // ── Primary: Supabase JWT validation ────────────────────────────────────
   if (isSupabaseConfigured()) {
-    const supabaseAnon = createServerClient();
+    const supabaseAnon = createServerClient(req);
     if (supabaseAnon) {
-      const { data: { user }, error } = await (supabaseAnon as any).auth.getUser();
+      // 1. Check for Bearer token in Authorization header first
+      const authHeader = req.headers.get('authorization') || '';
+      const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
 
-      if (error || !user) {
-        return null;
-      }
-
-      const adminClient = createAdminClient();
-      if (!adminClient) {
-        return null;
-      }
-
-      const { data: profile } = await (adminClient as any)
-        .from('profiles')
-        .select('id, role, email, name, company_id')
-        .eq('id', user.id)
-        .maybeSingle();
-
-      if (!profile) {
-        return null;
-      }
-
-      const userRole = (profile.role as ServerUserSession['role']) || 'worker';
-      const userEmail = (profile.email as string) || user.email || '';
-      const userName = (profile.name as string) || '';
-
-      // Determine requested company
-      let desiredCompanyId = targetCompanyId?.trim();
-      if (!desiredCompanyId) {
-        // Check active workspace cookie
-        const sessionCookie = req.cookies.get('kazibox_session')?.value;
-        if (sessionCookie) {
-          try {
-            const decoded = JSON.parse(decodeURIComponent(sessionCookie));
-            if (decoded?.companyId) {
-              desiredCompanyId = decoded.companyId;
-            }
-          } catch {
-            // Ignore malformed cookie
-          }
+      let user: any = null;
+      if (bearerToken) {
+        const { data: tokenUserData } = await (supabaseAnon as any).auth.getUser(bearerToken);
+        if (tokenUserData?.user) {
+          user = tokenUserData.user;
         }
       }
 
-      // 1. If no specific target requested or target matches primary company
-      if (!desiredCompanyId || desiredCompanyId === profile.company_id) {
-        return {
-          userId: profile.id as string,
-          companyId: profile.company_id as string,
-          role: userRole,
-          email: userEmail,
-          name: userName,
-        };
+      // 2. If no valid bearer token, check session cookies via @supabase/ssr
+      if (!user) {
+        const { data: cookieUserData } = await (supabaseAnon as any).auth.getUser();
+        if (cookieUserData?.user) {
+          user = cookieUserData.user;
+        }
       }
 
-      // 2. Platform admin can access any workspace with platform_admin role
-      if (userRole === 'platform_admin') {
-        return {
-          userId: profile.id as string,
-          companyId: desiredCompanyId,
-          role: 'platform_admin',
-          email: userEmail,
-          name: userName,
-        };
+      if (user) {
+        const adminClient = createAdminClient();
+        const dbClient = adminClient || supabaseAnon;
+
+        const { data: profile } = await (dbClient as any)
+          .from('profiles')
+          .select('id, role, email, name, company_id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (!profile) {
+          return null;
+        }
+
+        const userRole = (profile.role as ServerUserSession['role']) || 'worker';
+        const userEmail = (profile.email as string) || user.email || '';
+        const userName = (profile.name as string) || '';
+
+        // Determine requested company
+        let desiredCompanyId = targetCompanyId?.trim();
+        if (!desiredCompanyId) {
+          // Check active workspace cookie
+          const sessionCookie = req.cookies.get('kazibox_session')?.value;
+          if (sessionCookie) {
+            try {
+              const decoded = JSON.parse(decodeURIComponent(sessionCookie));
+              if (decoded?.companyId) {
+                desiredCompanyId = decoded.companyId;
+              }
+            } catch {
+              // Ignore malformed cookie
+            }
+          }
+        }
+
+        // 1. If no specific target requested or target matches primary company
+        if (!desiredCompanyId || desiredCompanyId === profile.company_id) {
+          return {
+            userId: profile.id as string,
+            companyId: profile.company_id as string,
+            role: userRole,
+            email: userEmail,
+            name: userName,
+          };
+        }
+
+        // 2. Platform admin can access any workspace with platform_admin role
+        if (userRole === 'platform_admin') {
+          return {
+            userId: profile.id as string,
+            companyId: desiredCompanyId,
+            role: 'platform_admin',
+            email: userEmail,
+            name: userName,
+          };
+        }
+
+        // 3. User is requesting a different company: verify membership in team_members
+        const { data: member } = await (dbClient as any)
+          .from('team_members')
+          .select('role, status')
+          .eq('company_id', desiredCompanyId)
+          .or(`user_id.eq.${user.id},email.eq.${userEmail}`)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        if (member) {
+          return {
+            userId: profile.id as string,
+            companyId: desiredCompanyId,
+            role: (member.role as ServerUserSession['role']) || 'worker',
+            email: userEmail,
+            name: userName,
+          };
+        }
+
+        // If user specifically requested a company they don't belong to, return null
+        // (Caller will reject as 403 Forbidden via requireServerAuth)
+        return null;
       }
-
-      // 3. User is requesting a different company: verify membership in team_members
-      const { data: member } = await (adminClient as any)
-        .from('team_members')
-        .select('role, status')
-        .eq('company_id', desiredCompanyId)
-        .or(`user_id.eq.${user.id},email.eq.${userEmail}`)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (member) {
-        return {
-          userId: profile.id as string,
-          companyId: desiredCompanyId,
-          role: (member.role as ServerUserSession['role']) || 'worker',
-          email: userEmail,
-          name: userName,
-        };
-      }
-
-      // If user specifically requested a company they don't belong to, return null
-      // (Caller will reject as 403 Forbidden via requireServerAuth)
-      return null;
     }
   }
 
