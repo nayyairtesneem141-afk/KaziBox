@@ -93,7 +93,9 @@ export class MoteurAdapter {
       'unknown';
     const subscriberEmail = request.customer?.email || undefined;
     const subscriberName = request.customer?.name || undefined;
-    const subscriberPhone = request.customer?.phone || undefined;
+    const subscriberPhone = request.customer?.phone
+      ? String(request.customer.phone).replace(/[^\d+]/g, '')
+      : undefined;
     const rawPlanKey = request.planKey || request.planId || 'starter';
     const planKey =
       rawPlanKey === 'single'
@@ -107,27 +109,18 @@ export class MoteurAdapter {
     const payload = {
       action: 'payments.collect',
       app_code: appCode,
-      application_code: appCode,
       saas_id: saasId,
       subscriber_ext_id: subscriberExtId,
-      subscriber_id: subscriberExtId,
       subscriber_email: subscriberEmail,
       subscriber_name: subscriberName,
       subscriber_phone: subscriberPhone,
-      customer_email: subscriberEmail,
-      customer_name: subscriberName,
-      customer_phone: subscriberPhone,
       company_id: request.companyId,
       plan_key: planKey,
-      plan_id: request.planId,
-      planKey: planKey,
-      plan_code: planKey,
+      plan_id: planKey,
       module_key: request.moduleIds?.[0] || planKey,
       module_keys: request.moduleIds,
       module_ids: request.moduleIds,
       billing_cycle: request.billingCycle,
-      cycle: request.billingCycle,
-      period: request.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: request.amount,
       currency: request.currency,
@@ -135,20 +128,17 @@ export class MoteurAdapter {
       idempotency_key: request.idempotencyKey,
       reference: request.idempotencyKey,
       return_url: returnUrl,
-      redirect_url: returnUrl,
       callback_url: callbackUrl,
       metadata: {
         app_code: appCode,
         saas_id: saasId,
         company_id: request.companyId,
         subscriber_ext_id: subscriberExtId,
-        subscriber_id: subscriberExtId,
         plan_key: planKey,
-        plan_id: request.planId,
+        plan_id: planKey,
         module_ids: request.moduleIds,
         module_keys: request.moduleIds,
         billing_cycle: request.billingCycle,
-        cycle: request.billingCycle,
         // Preserve referral attribution for Moteur ambassador commission calculations
         referral_code: request.referralCode || null,
         description: MOTEUR_PAYMENT_DESCRIPTION,
@@ -162,6 +152,7 @@ export class MoteurAdapter {
         email: subscriberEmail,
         phone: subscriberPhone,
         ...(request.customer || {}),
+        ...(subscriberPhone ? { phone: subscriberPhone } : {}),
       },
     };
 

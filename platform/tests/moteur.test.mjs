@@ -111,6 +111,13 @@ class MockMoteurAdapter {
     const appCode = this.config.appCode || 'demosaas';
     const subscriberExtId = req.subscriberExtId || req.companyId || (req.customer && req.customer.id) || 'unknown';
 
+    const resolvedPlanKey =
+      req.planKey === 'single' || (!req.planKey && req.planId === 'single')
+        ? 'starter'
+        : req.planKey === 'bundle' || (!req.planKey && req.planId === 'bundle')
+        ? 'pro'
+        : req.planKey || req.planId || 'starter';
+
     const payload = {
       action: 'payments.collect',
       app_code: appCode,
@@ -121,16 +128,10 @@ class MockMoteurAdapter {
       subscriber_email: req.customer ? req.customer.email : undefined,
       subscriber_name: req.customer ? req.customer.name : undefined,
       subscriber_phone: req.customer ? req.customer.phone : undefined,
-      plan_key:
-        req.planKey === 'single' || (!req.planKey && req.planId === 'single')
-          ? 'starter'
-          : req.planKey === 'bundle' || (!req.planKey && req.planId === 'bundle')
-          ? 'pro'
-          : req.planKey || req.planId || 'starter',
-      plan_id: req.planId,
+      plan_key: resolvedPlanKey,
+      plan_id: resolvedPlanKey,
       module_ids: req.moduleIds,
       billing_cycle: req.billingCycle,
-      cycle: req.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: req.amount,
       currency: req.currency,
@@ -142,13 +143,8 @@ class MockMoteurAdapter {
         saas_id: saasId,
         company_id: req.companyId,
         subscriber_ext_id: subscriberExtId,
-        plan_key:
-          req.planKey === 'single' || (!req.planKey && req.planId === 'single')
-            ? 'starter'
-            : req.planKey === 'bundle' || (!req.planKey && req.planId === 'bundle')
-            ? 'pro'
-            : req.planKey || req.planId || 'starter',
-        plan_id: req.planId,
+        plan_key: resolvedPlanKey,
+        plan_id: resolvedPlanKey,
         module_ids: req.moduleIds,
         billing_cycle: req.billingCycle,
         referral_code: req.referralCode || null,

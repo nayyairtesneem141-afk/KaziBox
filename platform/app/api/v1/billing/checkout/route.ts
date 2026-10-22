@@ -120,9 +120,11 @@ export async function POST(req: NextRequest) {
         ? 'pro'
         : rawPlanKey || 'starter';
 
+    const cleanPhone = customer?.phone ? String(customer.phone).replace(/[^\d+]/g, '') : undefined;
+
     const result = await moteurService.createCheckoutSession({
       companyId: targetCompanyId,
-      planId,
+      planId: resolvedPlanKey,
       planKey: resolvedPlanKey,
       billingCycle,
       moduleIds: Array.isArray(moduleIds) ? moduleIds : [],
@@ -130,9 +132,10 @@ export async function POST(req: NextRequest) {
       amount: Number(amount),
       customer: {
         id: session.userId,
-        name: session.email,
-        email: session.email,
+        name: customer?.name || session.email || 'Client KaziBox',
+        email: customer?.email || session.email || undefined,
         ...(customer || {}),
+        ...(cleanPhone ? { phone: cleanPhone } : {}),
       },
       referralCode: referralCode || undefined,
       returnUrl: resolvedReturnUrl,
