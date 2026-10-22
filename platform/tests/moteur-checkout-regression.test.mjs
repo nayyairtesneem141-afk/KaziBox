@@ -211,10 +211,19 @@ async function simulateCheckoutRoute(req, moteurAdapter) {
     };
   }
 
+  const rawPlanKey = body?.planKey || body?.plan_key || planId;
+  const resolvedPlanKey =
+    rawPlanKey === 'single'
+      ? 'starter'
+      : rawPlanKey === 'bundle'
+      ? 'pro'
+      : rawPlanKey || 'starter';
+
   // Initiate session with Moteur
   const moteurRes = await moteurAdapter.initiatePaymentSession({
     companyId: targetCompanyId,
     planId,
+    planKey: resolvedPlanKey,
     billingCycle,
     moduleIds: Array.isArray(moduleIds) ? moduleIds : [],
     country,
@@ -294,6 +303,18 @@ class MockMoteurAdapter {
         status: 'failed',
         errorCode: 'HTTP_502',
         errorMessage: this.customErrorMessage || 'Failed to connect to Moteur backend',
+      };
+    }
+
+    if (this.failMode === 'moteur_rejection') {
+      return {
+        success: false,
+        sessionId: '',
+        reference: ref,
+        status: 'failed',
+        errorCode: 'HTTP_502',
+        errorMessage: this.customErrorMessage || 'Moteur payment session initialization failed (req_id: 796c7bee-3bbe-4506-bb4b-6c8eed1f9c52)',
+        raw: { request_id: '796c7bee-3bbe-4506-bb4b-6c8eed1f9c52', code: 'INVALID_PLAN_KEY' },
       };
     }
 
@@ -922,6 +943,101 @@ test('19. Idempotent retry: Repeated checkout attempts remain safe and cause no 
   assert.strictEqual(localState.subscriptions[0].included_module_ids.length, 1);
   assert.strictEqual(simulateGetModuleEntitlement(testCompanyId, 'garage-auto', localState), 'none');
   assert.strictEqual(simulateGetModuleEntitlement(testCompanyId, 'hotel-property', localState), 'active');
+});
+
+test('20. Plan key mapping: planId "single" maps strictly to plan_key "starter" and "bundle" to "pro"', async () => {
+  const adapter = new MockMoteurAdapter();
+  const testCompanyId = 'comp-garage-01';
+
+  // Test single -> starter
+  const req1 = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      planKey: 'single', // Explicit 'single' planKey must still be mapped to 'starter'
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+  const res1 = await simulateCheckoutRoute(req1, adapter);
+  assert.strictEqual(res1.status, 200);
+  assert.strictEqual(adapter.calls[0].planKey, 'starter', 'planKey "single" must be normalized to "starter"');
+
+  // Test bundle -> pro
+  const req2 = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'bundle',
+      planKey: 'bundle',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto', 'hotel-property'],
+      amount: 35000,
+      country: 'CI',
+    },
+  };
+  const res2 = await simulateCheckoutRoute(req2, adapter);
+  assert.strictEqual(res2.status, 200);
+  assert.strictEqual(adapter.calls[1].planKey, 'pro', 'planKey "bundle" must be normalized to "pro"');
+});
+
+test('21. Moteur upstream rejection (Request ID 796c7bee-3bbe-4506-bb4b-6c8eed1f9c52) returns 502 with zero entitlements', async () => {
+  const adapter = new MockMoteurAdapter({ failMode: 'moteur_rejection' });
+  const testCompanyId = 'comp-garage-01';
+  const localState = {
+    ...state,
+    company_modules: [{ company_id: testCompanyId, module_id: 'garage', status: 'active' }],
+    subscriptions: [{ company_id: testCompanyId, plan_id: 'starter', status: 'active', included_module_ids: ['garage'] }],
+  };
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['hotel-property'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res.status, 502, 'Upstream failure must return 502 Bad Gateway');
+  assert.strictEqual(res.body.success, false);
+  assert(res.body.errorMessage.includes('796c7bee-3bbe-4506-bb4b-6c8eed1f9c52'), 'Error message must preserve request ID for tracing');
+
+  // Verify no entitlements were granted to hotel-property
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'hotel-property', localState);
+  assert.strictEqual(entitlement, 'none', 'Module entitlement must remain none after failed upstream checkout');
+});
+
+test('22. Sanitized error output does NOT leak internal credentials or tokens on Moteur errors', async () => {
+  const adapter = new MockMoteurAdapter({
+    failMode: 'moteur_rejection',
+    errorMessage: 'Moteur rejected transaction with req_id: 796c7bee-3bbe-4506-bb4b-6c8eed1f9c52',
+  });
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: 'comp-garage-01',
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+  const serialized = JSON.stringify(res.body);
+  assert(!serialized.includes('mock-jwt-'), 'Response must never leak bearer token');
+  assert(!serialized.includes('whsec_'), 'Response must never leak webhook secret');
+  assert(!serialized.includes('x_engine_'), 'Response must never leak API key');
 });
 
 // ─── Execution ──────────────────────────────────────────────────────────────

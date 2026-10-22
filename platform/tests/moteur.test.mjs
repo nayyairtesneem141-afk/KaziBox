@@ -121,8 +121,12 @@ class MockMoteurAdapter {
       subscriber_email: req.customer ? req.customer.email : undefined,
       subscriber_name: req.customer ? req.customer.name : undefined,
       subscriber_phone: req.customer ? req.customer.phone : undefined,
-      company_id: req.companyId,
-      plan_key: req.planKey || (req.planId === 'single' ? 'starter' : (req.planId === 'bundle' ? 'pro' : req.planId)) || 'starter',
+      plan_key:
+        req.planKey === 'single' || (!req.planKey && req.planId === 'single')
+          ? 'starter'
+          : req.planKey === 'bundle' || (!req.planKey && req.planId === 'bundle')
+          ? 'pro'
+          : req.planKey || req.planId || 'starter',
       plan_id: req.planId,
       module_ids: req.moduleIds,
       billing_cycle: req.billingCycle,
@@ -138,7 +142,12 @@ class MockMoteurAdapter {
         saas_id: saasId,
         company_id: req.companyId,
         subscriber_ext_id: subscriberExtId,
-        plan_key: req.planKey || (req.planId === 'single' ? 'starter' : (req.planId === 'bundle' ? 'pro' : req.planId)) || 'starter',
+        plan_key:
+          req.planKey === 'single' || (!req.planKey && req.planId === 'single')
+            ? 'starter'
+            : req.planKey === 'bundle' || (!req.planKey && req.planId === 'bundle')
+            ? 'pro'
+            : req.planKey || req.planId || 'starter',
         plan_id: req.planId,
         module_ids: req.moduleIds,
         billing_cycle: req.billingCycle,

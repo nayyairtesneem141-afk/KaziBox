@@ -112,10 +112,18 @@ export async function POST(req: NextRequest) {
     const defaultReturnUrl = `${req.nextUrl.origin}/billing`;
     const resolvedReturnUrl = returnUrl || return_url || defaultReturnUrl;
 
+    const rawPlanKey = planKey || plan_key || planId;
+    const resolvedPlanKey =
+      rawPlanKey === 'single'
+        ? 'starter'
+        : rawPlanKey === 'bundle'
+        ? 'pro'
+        : rawPlanKey || 'starter';
+
     const result = await moteurService.createCheckoutSession({
       companyId: targetCompanyId,
       planId,
-      planKey: planKey || plan_key || planId,
+      planKey: resolvedPlanKey,
       billingCycle,
       moduleIds: Array.isArray(moduleIds) ? moduleIds : [],
       country: countryConfig.code,

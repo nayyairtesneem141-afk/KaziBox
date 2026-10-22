@@ -87,7 +87,12 @@ export class MoteurPaymentService {
       companyId: params.companyId,
       subscriberExtId: params.companyId,
       planId: params.planId,
-      planKey: params.planKey || params.planId,
+      planKey:
+        params.planKey === 'single' || (!params.planKey && params.planId === 'single')
+          ? 'starter'
+          : params.planKey === 'bundle' || (!params.planKey && params.planId === 'bundle')
+          ? 'pro'
+          : params.planKey || params.planId || 'starter',
       moduleIds: params.moduleIds,
       billingCycle: params.billingCycle,
       customer: params.customer,
@@ -1061,6 +1066,43 @@ export class MoteurPaymentService {
         planId: localSession.planId,
         amount: localSession.amount,
         currency: localSession.currency,
+      };
+    }
+
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          const { data: dbPayment } = await supabase
+            .from('payment_history')
+            .select('reference, status, company_id, amount, currency')
+            .eq('reference', reference)
+            .maybeSingle();
+
+          if (dbPayment) {
+            return {
+              reference,
+              status: dbPayment.status === 'paid' ? 'succeeded' : (dbPayment.status as any),
+              companyId: dbPayment.company_id,
+              amount: dbPayment.amount,
+              currency: dbPayment.currency,
+            };
+          }
+        } catch {
+          // Fall through
+        }
+      }
+    }
+
+    const store = getStore();
+    const localPayment = store.payments.find((p) => p.invoiceNumber === reference || p.id === reference);
+    if (localPayment) {
+      return {
+        reference,
+        status: localPayment.status === 'paid' ? 'succeeded' : (localPayment.status as any),
+        companyId: localPayment.companyId,
+        amount: localPayment.amount,
+        currency: localPayment.currency,
       };
     }
 

@@ -94,14 +94,13 @@ export class MoteurAdapter {
     const subscriberEmail = request.customer?.email || undefined;
     const subscriberName = request.customer?.name || undefined;
     const subscriberPhone = request.customer?.phone || undefined;
+    const rawPlanKey = request.planKey || request.planId || 'starter';
     const planKey =
-      request.planKey ||
-      (request.planId === 'single'
+      rawPlanKey === 'single'
         ? 'starter'
-        : request.planId === 'bundle'
+        : rawPlanKey === 'bundle'
         ? 'pro'
-        : request.planId) ||
-      'starter';
+        : rawPlanKey;
     const returnUrl = request.returnUrl || 'https://kazibox.com/billing';
     const callbackUrl = request.callbackUrl || undefined;
 
@@ -164,8 +163,6 @@ export class MoteurAdapter {
         phone: subscriberPhone,
         ...(request.customer || {}),
       },
-      return_url: returnUrl,
-      callback_url: callbackUrl,
     };
 
     const endpoint = this.config.baseUrl.endsWith('/api/v1/payments/collect')

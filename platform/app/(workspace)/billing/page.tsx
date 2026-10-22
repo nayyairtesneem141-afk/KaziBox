@@ -61,6 +61,7 @@ function BillingPageContent() {
   // Checkout Stages: 'form' | 'waiting' | 'success'
   const [checkoutStage, setCheckoutStage] = useState<'form' | 'waiting' | 'success'>('form');
   const [successInvoiceId, setSuccessInvoiceId] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const loadData = async () => {
     if (!workspace) return;
@@ -183,9 +184,9 @@ function BillingPageContent() {
   }, [checkoutStage, pendingReference]);
 
   const handleExecuteCheckout = async () => {
-    if (!workspace) return;
+    if (!workspace || isSubmitting) return;
 
-    setCheckoutStage('waiting');
+    setIsSubmitting(true);
 
     const currencyMap: Record<string, string> = {
       CD: 'USD',
@@ -194,33 +195,36 @@ function BillingPageContent() {
       CI: 'XOF',
     };
 
-    const result = await startCheckout({
-      companyId: workspace.company_id,
-      planId: selectedPlanId,
-      billingCycle,
-      moduleIds: selectedPlanId === 'all_access' ? publishedModules.map((m) => m.id) : selectedModuleIds,
-      paymentMethod,
-      country,
-      operator,
-      phoneNumber,
-      cardName,
-      cardNumber,
-      cardExpiry,
-      cardCvc,
-      amount: calculateTotal(),
-      currency: currencyMap[country] || 'XOF',
-      referralCode: referralCode.trim() || undefined,
-    });
+    try {
+      const result = await startCheckout({
+        companyId: workspace.company_id,
+        planId: selectedPlanId,
+        billingCycle,
+        moduleIds: selectedPlanId === 'all_access' ? publishedModules.map((m) => m.id) : selectedModuleIds,
+        paymentMethod,
+        country,
+        operator,
+        phoneNumber,
+        cardName,
+        cardNumber,
+        cardExpiry,
+        cardCvc,
+        amount: calculateTotal(),
+        currency: currencyMap[country] || 'XOF',
+        referralCode: referralCode.trim() || undefined,
+      });
 
-    if (result.success) {
-      const ref = result.reference || `KZ-${Date.now()}`;
-      setPendingReference(ref);
-      // Client unconditionally enters waiting stage.
-      // Paid access is ONLY unlocked once server polling cryptographically confirms success.
-    } else {
-      setPendingReference('');
-      alert(result.error || result.message || t('billing.payment_failed'));
-      setCheckoutStage('form');
+      if (result.success) {
+        const ref = result.reference || `KZ-${Date.now()}`;
+        setPendingReference(ref);
+        setCheckoutStage('waiting');
+      } else {
+        setPendingReference('');
+        alert(result.error || result.message || t('billing.payment_failed'));
+        setCheckoutStage('form');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -982,8 +986,16 @@ function BillingPageContent() {
                       size="lg"
                       className="w-full font-black text-sm min-h-[48px]"
                       onClick={handleExecuteCheckout}
+                      disabled={isSubmitting}
                     >
-                      Payer {calculateTotal().toLocaleString()} {country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} via Moteur &rarr;
+                      {isSubmitting ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Initialisation du paiement...</span>
+                        </div>
+                      ) : (
+                        `Payer ${calculateTotal().toLocaleString()} ${country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} via Moteur →`
+                      )}
                     </Button>
                     <p className="text-[11px] text-[#9CA3AF] text-center mt-2">
                       Infrastructure centralisée Moteur &bull; Activation sur confirmation réelle
