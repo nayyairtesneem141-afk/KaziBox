@@ -121,16 +121,39 @@ export async function POST(req: NextRequest) {
       referralCode: referralCode || undefined,
     });
 
+    if (!result.success) {
+      const httpStatus =
+        result.errorCode === 'INVALID_COUNTRY' || result.errorCode === 'VALIDATION_ERROR'
+          ? 422
+          : result.errorCode === 'UNAUTHORIZED'
+          ? 401
+          : result.errorCode?.startsWith('HTTP_4')
+          ? 400
+          : 502;
+
+      console.warn(`[Billing Checkout] Session initialization rejected for company ${targetCompanyId.slice(0, 8)}...: httpStatus=${httpStatus}, errorCode=${result.errorCode}, message=${result.errorMessage}`);
+
+      return NextResponse.json(
+        {
+          success: false,
+          reference: result.reference,
+          sessionId: result.sessionId,
+          status: result.status,
+          errorCode: result.errorCode,
+          errorMessage: result.errorMessage,
+        },
+        { status: httpStatus }
+      );
+    }
+
     return NextResponse.json({
-      success: result.success,
+      success: true,
       reference: result.reference,
       sessionId: result.sessionId,
       status: result.status,
       checkoutUrl: result.checkoutUrl,
       qrCodeUrl: result.qrCodeUrl,
       instructions: result.instructions,
-      errorCode: result.errorCode,
-      errorMessage: result.errorMessage,
     });
   } catch (err: any) {
     return NextResponse.json(

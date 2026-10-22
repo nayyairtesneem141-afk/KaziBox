@@ -31,7 +31,12 @@ export function getMoteurConfig(): MoteurConfig | null {
     throw new Error('SECURITY VIOLATION: Moteur configuration cannot be accessed from client-side bundles');
   }
 
-  const baseUrl = process.env.MOTEUR_API_BASE_URL || process.env.MOTEUR_BACKEND_URL || DEFAULT_MOTEUR_API_BASE_URL;
+  const configuredUrl = process.env.MOTEUR_API_BASE_URL || process.env.MOTEUR_BACKEND_URL;
+  // If unconfigured or pointing to dead custom domain (moteur.kazibox.pro), fall back to live gateway
+  const baseUrl = !configuredUrl || configuredUrl.includes('moteur.kazibox.pro')
+    ? DEFAULT_MOTEUR_API_BASE_URL
+    : configuredUrl;
+
   const apiKey = process.env.MOTEUR_API_KEY || process.env.MOTEUR_SECRET_KEY || '';
   const gatewayBearerToken = process.env.MOTEUR_GATEWAY_BEARER_TOKEN || '';
   const appCode = process.env.MOTEUR_APP_CODE || 'demosaas';
@@ -61,16 +66,16 @@ export function getMoteurConfig(): MoteurConfig | null {
  * Inspects server environment to report integration readiness without exposing secrets
  */
 export function getMoteurConfigStatus(): MoteurConfigurationStatus {
-  const baseUrl = process.env.MOTEUR_API_BASE_URL || process.env.MOTEUR_BACKEND_URL || DEFAULT_MOTEUR_API_BASE_URL;
+  const configuredUrl = process.env.MOTEUR_API_BASE_URL || process.env.MOTEUR_BACKEND_URL;
+  const baseUrl = !configuredUrl || configuredUrl.includes('moteur.kazibox.pro')
+    ? DEFAULT_MOTEUR_API_BASE_URL
+    : configuredUrl;
   const hasBaseUrl = Boolean(baseUrl);
   const hasApiKey = Boolean(process.env.MOTEUR_API_KEY || process.env.MOTEUR_SECRET_KEY);
   const hasWebhookSecret = Boolean(process.env.MOTEUR_WEBHOOK_SECRET);
   const environment = process.env.MOTEUR_ENVIRONMENT === 'production' ? 'production' : 'sandbox';
 
   const missingVariables: string[] = [];
-  if (!process.env.MOTEUR_API_BASE_URL && !process.env.MOTEUR_BACKEND_URL) {
-    // Base URL defaults to confirmed custom domain: https://moteur.kazibox.pro
-  }
   if (!hasApiKey) missingVariables.push('MOTEUR_API_KEY');
   if (!hasWebhookSecret) missingVariables.push('MOTEUR_WEBHOOK_SECRET');
 

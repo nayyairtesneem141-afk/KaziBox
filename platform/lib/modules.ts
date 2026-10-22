@@ -209,7 +209,7 @@ export async function getModuleEntitlement(
           // Double-check with workspace subscriptions table
           const { data: latestSub } = await supabase
             .from('subscriptions')
-            .select('status, current_period_end')
+            .select('status, plan_id, included_module_ids, current_period_end')
             .eq('company_id', companyId)
             .order('created_at', { ascending: false })
             .limit(1)
@@ -218,9 +218,16 @@ export async function getModuleEntitlement(
           if (latestSub) {
             const isSubExpired = latestSub.current_period_end && new Date(latestSub.current_period_end) <= new Date();
             const isSubInactive = latestSub.status !== 'active' && latestSub.status !== 'trial';
-            if (isSubExpired || isSubInactive) {
+            const isSubCovered =
+              latestSub.plan_id === 'all_access' ||
+              (Array.isArray(latestSub.included_module_ids) &&
+                targetIds.some((id: string) => latestSub.included_module_ids.includes(id)));
+
+            if (isSubExpired || isSubInactive || !isSubCovered) {
               return 'read_only';
             }
+          } else {
+            return 'none';
           }
 
           return 'active';
@@ -265,6 +272,9 @@ export async function getModuleEntitlement(
           return 'read_only';
         }
       }
+
+      // Supabase is configured and authoritative; workspace has no entitlement to this paid module
+      return 'none';
     }
   }
 

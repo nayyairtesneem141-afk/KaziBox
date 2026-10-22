@@ -114,12 +114,9 @@ export class MoteurAdapter {
       callback_url: request.callbackUrl,
     };
 
-    const isSupabaseGateway = this.config.baseUrl.includes('engine-api-gateway');
     const endpoint = this.config.baseUrl.endsWith('/api/v1/payments/collect')
       ? this.config.baseUrl
-      : isSupabaseGateway
-      ? `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/collect`
-      : `${this.config.baseUrl.replace(/\/+$/, '')}/v1/checkout/sessions`;
+      : `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/collect`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -147,13 +144,18 @@ export class MoteurAdapter {
       const json = await response.json();
 
       if (!response.ok) {
+        const errorMsg =
+          json.message ||
+          (typeof json.error === 'string' ? json.error : json.error?.message) ||
+          'Moteur payment session initialization failed';
+
         return {
           success: false,
           sessionId: '',
           reference: request.idempotencyKey,
           status: 'failed',
-          errorCode: json.code || json.error?.code || `HTTP_${response.status}`,
-          errorMessage: json.message || json.error?.message || 'Moteur payment session initialization failed',
+          errorCode: json.code || (typeof json.error === 'object' ? json.error?.code : null) || `HTTP_${response.status}`,
+          errorMessage: errorMsg,
           raw: json,
         };
       }
@@ -205,10 +207,7 @@ export class MoteurAdapter {
 
     try {
       const identifier = encodeURIComponent(query.sessionId || query.reference);
-      const isSupabaseGateway = this.config.baseUrl.includes('engine-api-gateway');
-      const endpoint = isSupabaseGateway
-        ? `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/${identifier}`
-        : `${this.config.baseUrl.replace(/\/+$/, '')}/v1/payments/${identifier}`;
+      const endpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/${identifier}`;
 
       const headers: Record<string, string> = {};
       if (this.config.apiKey) headers['x-engine-api-key'] = this.config.apiKey;

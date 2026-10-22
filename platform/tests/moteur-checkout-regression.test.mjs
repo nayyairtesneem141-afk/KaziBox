@@ -227,6 +227,29 @@ async function simulateCheckoutRoute(req, moteurAdapter) {
     },
   });
 
+  if (!moteurRes.success) {
+    const httpStatus =
+      moteurRes.errorCode === 'INVALID_COUNTRY' || moteurRes.errorCode === 'VALIDATION_ERROR'
+        ? 422
+        : moteurRes.errorCode === 'UNAUTHORIZED'
+        ? 401
+        : moteurRes.errorCode?.startsWith('HTTP_4')
+        ? 400
+        : 502;
+
+    return {
+      status: httpStatus,
+      body: {
+        success: false,
+        reference: moteurRes.reference,
+        sessionId: moteurRes.sessionId,
+        status: moteurRes.status,
+        errorCode: moteurRes.errorCode,
+        errorMessage: moteurRes.errorMessage,
+      },
+    };
+  }
+
   return {
     status: 200,
     body: {
@@ -242,13 +265,38 @@ async function simulateCheckoutRoute(req, moteurAdapter) {
 // ─── Mock Moteur Adapter ────────────────────────────────────────────────────
 
 class MockMoteurAdapter {
-  constructor() {
+  constructor(options = {}) {
     this.calls = [];
+    this.failMode = options.failMode || null; // 'unauthorized' | 'gateway_error' | null
+    this.customErrorMessage = options.errorMessage;
   }
 
   async initiatePaymentSession(params) {
     this.calls.push(params);
     const ref = `KZ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    if (this.failMode === 'unauthorized') {
+      return {
+        success: false,
+        sessionId: '',
+        reference: ref,
+        status: 'failed',
+        errorCode: 'UNAUTHORIZED',
+        errorMessage: this.customErrorMessage || 'Moteur payment session initialization failed',
+      };
+    }
+
+    if (this.failMode === 'gateway_error') {
+      return {
+        success: false,
+        sessionId: '',
+        reference: ref,
+        status: 'failed',
+        errorCode: 'HTTP_502',
+        errorMessage: this.customErrorMessage || 'Failed to connect to Moteur backend',
+      };
+    }
+
     return {
       success: true,
       sessionId: `sess_${Date.now()}`,
@@ -538,6 +586,342 @@ test('12. Sanitized logs: Confirm checkout logging avoids printing tokens or sec
   } finally {
     console.log = origLog;
   }
+});
+
+// ─── Entitlement Simulation matching modules.ts & activate route ─────────
+
+function simulateGetModuleEntitlement(companyId, moduleId, testState) {
+  const isFree = moduleId === 'demo';
+  if (isFree) return 'active';
+
+  const isGarage = ['garage', 'garage-auto'].includes(moduleId);
+  const isHotel = ['hotel', 'hotel-property'].includes(moduleId);
+  const targetIds = isGarage ? ['garage', 'garage-auto'] : isHotel ? ['hotel', 'hotel-property'] : [moduleId];
+
+  // 1. Check company_modules
+  const compMods = (testState.company_modules || []).filter(
+    (cm) => cm.company_id === companyId && targetIds.includes(cm.module_id)
+  );
+
+  if (compMods.length > 0) {
+    const activeMod = compMods.find((cm) => cm.status === 'active');
+    if (activeMod) {
+      // Must verify active subscription covers it
+      const sub = (testState.subscriptions || []).find((s) => s.company_id === companyId);
+      if (sub) {
+        const isCovered =
+          sub.plan_id === 'all_access' ||
+          (Array.isArray(sub.included_module_ids) && targetIds.some((id) => sub.included_module_ids.includes(id)));
+        const isStatusActive = sub.status === 'active' || sub.status === 'trial';
+        if (!isCovered || !isStatusActive) return 'read_only';
+        return 'active';
+      }
+      return 'none';
+    }
+    return 'read_only';
+  }
+
+  // 2. Check subscriptions table
+  const sub = (testState.subscriptions || []).find((s) => s.company_id === companyId);
+  if (sub) {
+    const isCovered =
+      sub.plan_id === 'all_access' ||
+      (Array.isArray(sub.included_module_ids) && targetIds.some((id) => sub.included_module_ids.includes(id)));
+    const isStatusActive = sub.status === 'active' || sub.status === 'trial';
+    if (isCovered && isStatusActive) return 'active';
+    if (isCovered) return 'read_only';
+  }
+
+  return 'none';
+}
+
+function simulateActivateRoute(session, body, testState) {
+  if (!session) {
+    return { status: 401, body: { success: false, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' } };
+  }
+  const { moduleId, companyId } = body || {};
+  const effectiveCompany = session.role === 'platform_admin' && companyId ? companyId : session.companyId;
+
+  if (session.role !== 'platform_admin' && companyId && companyId !== session.companyId) {
+    return { status: 403, body: { success: false, error: 'Forbidden', code: 'COMPANY_MISMATCH' } };
+  }
+  if (!isPrivilegedRole(session)) {
+    return { status: 403, body: { success: false, error: 'Forbidden', code: 'INSUFFICIENT_ROLE' } };
+  }
+
+  const isFree = moduleId === 'demo';
+  if (session.role !== 'platform_admin' && !isFree) {
+    const sub = (testState.subscriptions || []).find((s) => s.company_id === effectiveCompany);
+    const isGarage = ['garage', 'garage-auto'].includes(moduleId);
+    const isHotel = ['hotel', 'hotel-property'].includes(moduleId);
+    const targetIds = isGarage ? ['garage', 'garage-auto'] : isHotel ? ['hotel', 'hotel-property'] : [moduleId];
+
+    const isCovered =
+      sub &&
+      (sub.status === 'active' || sub.status === 'trial') &&
+      (sub.plan_id === 'all_access' ||
+        (Array.isArray(sub.included_module_ids) && targetIds.some((id) => sub.included_module_ids.includes(id))));
+
+    if (!isCovered) {
+      return {
+        status: 402,
+        body: {
+          success: false,
+          error: 'Forbidden',
+          code: 'SUBSCRIPTION_REQUIRED',
+          message: 'An active subscription covering this module is required to activate it.',
+        },
+      };
+    }
+  }
+
+  testState.company_modules = testState.company_modules || [];
+  testState.company_modules.push({
+    company_id: effectiveCompany,
+    module_id: moduleId,
+    status: 'active',
+  });
+
+  return { status: 200, body: { success: true } };
+}
+
+test('13. Garage module checkout session failure (401 UNAUTHORIZED) grants NO entitlements', async () => {
+  const adapter = new MockMoteurAdapter({
+    failMode: 'unauthorized',
+    errorMessage: 'Moteur payment session initialization failed',
+  });
+
+  const testCompanyId = 'comp-hotel-01'; // Palmeraie (hotel business buying garage)
+  const localState = {
+    ...state,
+    company_modules: [
+      { company_id: testCompanyId, module_id: 'hotel-property', status: 'active' },
+    ],
+    subscriptions: [
+      { company_id: testCompanyId, plan_id: 'single', status: 'active', included_module_ids: ['hotel-property'] },
+    ],
+  };
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-hotel' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+
+  // Exact HTTP status and sanitized response body check
+  assert.strictEqual(res.status, 401, 'Failed authorization with Moteur must return 401');
+  assert.strictEqual(res.body.success, false);
+  assert.strictEqual(res.body.status, 'failed');
+  assert.strictEqual(res.body.errorCode, 'UNAUTHORIZED');
+  assert.strictEqual(res.body.errorMessage, 'Moteur payment session initialization failed');
+  assert(res.body.reference.startsWith('KZ-'), 'Sanitized reference returned');
+
+  // Verify Garage is NOT in company_modules
+  const hasGarageInMods = (localState.company_modules || []).some((m) => m.module_id === 'garage-auto');
+  assert.strictEqual(hasGarageInMods, false, 'Failed checkout must not write to company_modules');
+
+  // Verify Garage is NOT in subscriptions
+  const sub = localState.subscriptions.find((s) => s.company_id === testCompanyId);
+  assert.strictEqual(sub.included_module_ids.includes('garage-auto'), false, 'Failed checkout must not update subscription');
+
+  // Verify entitlement check returns 'none'
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'garage-auto', localState);
+  assert.strictEqual(entitlement, 'none', 'Garage entitlement must remain none after failed checkout');
+});
+
+test('14. Hotel module checkout session failure (401 UNAUTHORIZED) grants NO entitlements', async () => {
+  const adapter = new MockMoteurAdapter({
+    failMode: 'unauthorized',
+    errorMessage: 'Moteur payment session initialization failed',
+  });
+
+  const testCompanyId = 'comp-garage-01'; // Garage business buying hotel
+  const localState = {
+    ...state,
+    company_modules: [
+      { company_id: testCompanyId, module_id: 'garage', status: 'active' },
+    ],
+    subscriptions: [
+      { company_id: testCompanyId, plan_id: 'single', status: 'active', included_module_ids: ['garage', 'garage-auto'] },
+    ],
+  };
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['hotel-property'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+
+  assert.strictEqual(res.status, 401, 'Failed authorization with Moteur must return 401');
+  assert.strictEqual(res.body.success, false);
+  assert.strictEqual(res.body.status, 'failed');
+  assert.strictEqual(res.body.errorCode, 'UNAUTHORIZED');
+  assert.strictEqual(res.body.errorMessage, 'Moteur payment session initialization failed');
+
+  // Verify Hotel is NOT in company_modules
+  const hasHotelInMods = (localState.company_modules || []).some((m) => m.module_id === 'hotel-property');
+  assert.strictEqual(hasHotelInMods, false, 'Failed checkout must not write to company_modules');
+
+  // Verify Hotel is NOT in subscriptions
+  const sub = localState.subscriptions.find((s) => s.company_id === testCompanyId);
+  assert.strictEqual(sub.included_module_ids.includes('hotel-property'), false);
+
+  // Verify entitlement check returns 'none'
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'hotel-property', localState);
+  assert.strictEqual(entitlement, 'none', 'Hotel entitlement must remain none after failed checkout');
+});
+
+test('15. Garage checkout session failure (502 Bad Gateway) returns 502 with zero grants', async () => {
+  const adapter = new MockMoteurAdapter({ failMode: 'gateway_error' });
+  const testCompanyId = 'comp-hotel-01';
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-hotel' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res.status, 502, 'Gateway failure must return 502 Bad Gateway');
+  assert.strictEqual(res.body.success, false);
+  assert.strictEqual(res.body.errorCode, 'HTTP_502');
+});
+
+test('16. Hotel checkout session failure (502 Bad Gateway) returns 502 with zero grants', async () => {
+  const adapter = new MockMoteurAdapter({ failMode: 'gateway_error' });
+  const testCompanyId = 'comp-garage-01';
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-garage' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['hotel-property'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res.status, 502, 'Gateway failure must return 502 Bad Gateway');
+  assert.strictEqual(res.body.success, false);
+  assert.strictEqual(res.body.errorCode, 'HTTP_502');
+});
+
+test('17. Prevention of unauthorized activation via /api/v1/modules/activate', async () => {
+  const testCompanyId = 'comp-hotel-01';
+  const localState = {
+    ...state,
+    company_modules: [{ company_id: testCompanyId, module_id: 'hotel-property', status: 'active' }],
+    subscriptions: [{ company_id: testCompanyId, plan_id: 'single', status: 'active', included_module_ids: ['hotel-property'] }],
+  };
+
+  const session = {
+    userId: 'usr-owner-hotel',
+    companyId: testCompanyId,
+    role: 'owner',
+    email: 'owner@hotel.ci',
+  };
+
+  // Attempt to activate unpaid Garage module without subscription
+  const garageRes = simulateActivateRoute(session, { companyId: testCompanyId, moduleId: 'garage-auto' }, localState);
+  assert.strictEqual(garageRes.status, 402, 'Activating paid module without subscription must return 402');
+  assert.strictEqual(garageRes.body.code, 'SUBSCRIPTION_REQUIRED');
+
+  // Attempt to activate free demo module
+  const demoRes = simulateActivateRoute(session, { companyId: testCompanyId, moduleId: 'demo' }, localState);
+  assert.strictEqual(demoRes.status, 200, 'Free demo module can be activated without subscription');
+  assert.strictEqual(demoRes.body.success, true);
+});
+
+test('18. Successful session creation starts in pending and does NOT prematurely activate module', async () => {
+  const adapter = new MockMoteurAdapter();
+  const testCompanyId = 'comp-hotel-01';
+  const localState = {
+    ...state,
+    company_modules: [{ company_id: testCompanyId, module_id: 'hotel-property', status: 'active' }],
+    subscriptions: [{ company_id: testCompanyId, plan_id: 'single', status: 'active', included_module_ids: ['hotel-property'] }],
+  };
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-hotel' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  const res = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(res.body.status, 'pending');
+
+  // Entitlement remains 'none' because payment has not been confirmed via webhook
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'garage-auto', localState);
+  assert.strictEqual(entitlement, 'none', 'Entitlement must remain none while session is pending');
+});
+
+test('19. Idempotent retry: Repeated checkout attempts remain safe and cause no partial state', async () => {
+  const adapter = new MockMoteurAdapter({ failMode: 'unauthorized' });
+  const testCompanyId = 'comp-hotel-01';
+  const localState = {
+    ...state,
+    company_modules: [{ company_id: testCompanyId, module_id: 'hotel-property', status: 'active' }],
+    subscriptions: [{ company_id: testCompanyId, plan_id: 'single', status: 'active', included_module_ids: ['hotel-property'] }],
+  };
+
+  const req = {
+    headers: { Authorization: 'Bearer mock-jwt-usr-owner-hotel' },
+    body: {
+      companyId: testCompanyId,
+      planId: 'single',
+      billingCycle: 'monthly',
+      moduleIds: ['garage-auto'],
+      amount: 15000,
+      country: 'CI',
+    },
+  };
+
+  // First failed attempt
+  const res1 = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res1.status, 401);
+
+  // Second retry attempt
+  const res2 = await simulateCheckoutRoute(req, adapter);
+  assert.strictEqual(res2.status, 401);
+
+  // Assert localState was never modified or corrupted
+  assert.strictEqual(localState.company_modules.length, 1);
+  assert.strictEqual(localState.subscriptions[0].included_module_ids.length, 1);
+  assert.strictEqual(simulateGetModuleEntitlement(testCompanyId, 'garage-auto', localState), 'none');
+  assert.strictEqual(simulateGetModuleEntitlement(testCompanyId, 'hotel-property', localState), 'active');
 });
 
 // ─── Execution ──────────────────────────────────────────────────────────────

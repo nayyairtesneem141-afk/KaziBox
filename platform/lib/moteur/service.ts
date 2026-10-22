@@ -113,10 +113,13 @@ export class MoteurPaymentService {
     // Delegate to adapter
     const result = await this.adapter.initiatePaymentSession(initiateReq);
 
-    if (result.sessionId) {
-      const rec = sessions.get(reference);
-      if (rec) {
+    const rec = sessions.get(reference);
+    if (rec) {
+      if (result.success && result.sessionId) {
         rec.sessionId = result.sessionId;
+        rec.updatedAt = new Date().toISOString();
+      } else if (!result.success) {
+        rec.status = 'failed';
         rec.updatedAt = new Date().toISOString();
       }
     }

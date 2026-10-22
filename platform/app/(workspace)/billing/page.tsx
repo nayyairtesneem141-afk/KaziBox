@@ -218,6 +218,7 @@ function BillingPageContent() {
       // Client unconditionally enters waiting stage.
       // Paid access is ONLY unlocked once server polling cryptographically confirms success.
     } else {
+      setPendingReference('');
       alert(result.error || result.message || t('billing.payment_failed'));
       setCheckoutStage('form');
     }
