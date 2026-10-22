@@ -122,9 +122,11 @@ class MockMoteurAdapter {
       subscriber_name: req.customer ? req.customer.name : undefined,
       subscriber_phone: req.customer ? req.customer.phone : undefined,
       company_id: req.companyId,
+      plan_key: req.planKey || req.planId || 'single',
       plan_id: req.planId,
       module_ids: req.moduleIds,
       billing_cycle: req.billingCycle,
+      cycle: req.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: req.amount,
       currency: req.currency,
@@ -136,6 +138,7 @@ class MockMoteurAdapter {
         saas_id: saasId,
         company_id: req.companyId,
         subscriber_ext_id: subscriberExtId,
+        plan_key: req.planKey || req.planId || 'single',
         plan_id: req.planId,
         module_ids: req.moduleIds,
         billing_cycle: req.billingCycle,
@@ -1332,8 +1335,10 @@ test('Section F: Collection endpoint success and failure', async () => {
   assertEqual(capturedBody.app_code, 'demosaas');
   assertEqual(capturedBody.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
   assertEqual(capturedBody.subscriber_ext_id, 'comp-valid-01');
+  assertEqual(capturedBody.plan_key, 'starter');
   assertEqual(capturedBody.metadata.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
   assertEqual(capturedBody.metadata.subscriber_ext_id, 'comp-valid-01');
+  assertEqual(capturedBody.metadata.plan_key, 'starter');
 
   // Test 2: Upstream Gateway 500 Failure
   const mockFailFetch = async () => ({

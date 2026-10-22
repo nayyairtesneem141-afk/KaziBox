@@ -30,12 +30,16 @@ export async function POST(req: NextRequest) {
   const {
     companyId,
     planId,
+    planKey,
+    plan_key,
     billingCycle,
     moduleIds,
     country = 'CI',
     amount,
     referralCode,
     customer,
+    returnUrl,
+    return_url,
   } = body || {};
 
   const session = await getServerSession(req, companyId);
@@ -105,9 +109,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const defaultReturnUrl = `${req.nextUrl.origin}/billing`;
+    const resolvedReturnUrl = returnUrl || return_url || defaultReturnUrl;
+
     const result = await moteurService.createCheckoutSession({
       companyId: targetCompanyId,
       planId,
+      planKey: planKey || plan_key || planId,
       billingCycle,
       moduleIds: Array.isArray(moduleIds) ? moduleIds : [],
       country: countryConfig.code,
@@ -119,6 +127,7 @@ export async function POST(req: NextRequest) {
         ...(customer || {}),
       },
       referralCode: referralCode || undefined,
+      returnUrl: resolvedReturnUrl,
     });
 
     if (!result.success) {

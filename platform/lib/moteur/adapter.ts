@@ -94,6 +94,9 @@ export class MoteurAdapter {
     const subscriberEmail = request.customer?.email || undefined;
     const subscriberName = request.customer?.name || undefined;
     const subscriberPhone = request.customer?.phone || undefined;
+    const planKey = request.planKey || request.planId || 'single';
+    const returnUrl = request.returnUrl || 'https://kazibox.com/billing';
+    const callbackUrl = request.callbackUrl || undefined;
 
     const payload = {
       action: 'payments.collect',
@@ -105,24 +108,41 @@ export class MoteurAdapter {
       subscriber_email: subscriberEmail,
       subscriber_name: subscriberName,
       subscriber_phone: subscriberPhone,
+      customer_email: subscriberEmail,
+      customer_name: subscriberName,
+      customer_phone: subscriberPhone,
       company_id: request.companyId,
+      plan_key: planKey,
       plan_id: request.planId,
+      planKey: planKey,
+      plan_code: planKey,
+      module_key: request.moduleIds?.[0] || planKey,
+      module_keys: request.moduleIds,
       module_ids: request.moduleIds,
       billing_cycle: request.billingCycle,
+      cycle: request.billingCycle,
+      period: request.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: request.amount,
       currency: request.currency,
       country: request.country,
       idempotency_key: request.idempotencyKey,
       reference: request.idempotencyKey,
+      return_url: returnUrl,
+      redirect_url: returnUrl,
+      callback_url: callbackUrl,
       metadata: {
         app_code: appCode,
         saas_id: saasId,
         company_id: request.companyId,
         subscriber_ext_id: subscriberExtId,
+        subscriber_id: subscriberExtId,
+        plan_key: planKey,
         plan_id: request.planId,
         module_ids: request.moduleIds,
+        module_keys: request.moduleIds,
         billing_cycle: request.billingCycle,
+        cycle: request.billingCycle,
         // Preserve referral attribution for Moteur ambassador commission calculations
         referral_code: request.referralCode || null,
         description: MOTEUR_PAYMENT_DESCRIPTION,
@@ -137,8 +157,8 @@ export class MoteurAdapter {
         phone: subscriberPhone,
         ...(request.customer || {}),
       },
-      return_url: request.returnUrl,
-      callback_url: request.callbackUrl,
+      return_url: returnUrl,
+      callback_url: callbackUrl,
     };
 
     const endpoint = this.config.baseUrl.endsWith('/api/v1/payments/collect')

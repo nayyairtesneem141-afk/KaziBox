@@ -90,6 +90,8 @@ export interface MoteurInitiatePaymentRequest {
   subscriberExtId?: string;
   /** Subscribed plan ID (e.g., 'single', 'bundle', 'all_access', 'custom') */
   planId: string;
+  /** Plan key expected by Moteur engine gateway (defaults to planId) */
+  planKey?: string;
   /** Module IDs to unlock upon payment success */
   moduleIds: string[];
   /** Billing cycle */

@@ -65,6 +65,7 @@ export class MoteurPaymentService {
   public async createCheckoutSession(params: {
     companyId: string;
     planId: string;
+    planKey?: string;
     billingCycle: 'monthly' | 'yearly';
     moduleIds: string[];
     country: 'CD' | 'CM' | 'SN' | 'CI';
@@ -86,6 +87,7 @@ export class MoteurPaymentService {
       companyId: params.companyId,
       subscriberExtId: params.companyId,
       planId: params.planId,
+      planKey: params.planKey || params.planId,
       moduleIds: params.moduleIds,
       billingCycle: params.billingCycle,
       customer: params.customer,
