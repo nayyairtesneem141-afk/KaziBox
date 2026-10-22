@@ -109,26 +109,44 @@ class MockMoteurAdapter {
 
     const saasId = this.config.saasId || '167a0c84-ce3c-488c-8367-d2e649933f34';
     const appCode = this.config.appCode || 'demosaas';
+    const subscriberExtId = req.subscriberExtId || req.companyId || (req.customer && req.customer.id) || 'unknown';
 
     const payload = {
       action: 'payments.collect',
       app_code: appCode,
       application_code: appCode,
       saas_id: saasId,
+      subscriber_ext_id: subscriberExtId,
+      subscriber_id: subscriberExtId,
+      subscriber_email: req.customer ? req.customer.email : undefined,
+      subscriber_name: req.customer ? req.customer.name : undefined,
+      subscriber_phone: req.customer ? req.customer.phone : undefined,
+      company_id: req.companyId,
+      plan_id: req.planId,
+      module_ids: req.moduleIds,
+      billing_cycle: req.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: req.amount,
       currency: req.currency,
       country: req.country,
       idempotency_key: req.idempotencyKey,
+      reference: req.idempotencyKey,
       metadata: {
         app_code: appCode,
         saas_id: saasId,
         company_id: req.companyId,
+        subscriber_ext_id: subscriberExtId,
         plan_id: req.planId,
         module_ids: req.moduleIds,
         billing_cycle: req.billingCycle,
         referral_code: req.referralCode || null,
         description: MOTEUR_PAYMENT_DESCRIPTION,
+      },
+      customer: {
+        id: (req.customer && req.customer.id) || subscriberExtId,
+        ext_id: subscriberExtId,
+        subscriber_ext_id: subscriberExtId,
+        ...(req.customer || {}),
       },
     };
 
@@ -1313,7 +1331,9 @@ test('Section F: Collection endpoint success and failure', async () => {
   assertEqual(capturedBody.action, 'payments.collect');
   assertEqual(capturedBody.app_code, 'demosaas');
   assertEqual(capturedBody.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+  assertEqual(capturedBody.subscriber_ext_id, 'comp-valid-01');
   assertEqual(capturedBody.metadata.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+  assertEqual(capturedBody.metadata.subscriber_ext_id, 'comp-valid-01');
 
   // Test 2: Upstream Gateway 500 Failure
   const mockFailFetch = async () => ({

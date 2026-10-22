@@ -86,21 +86,40 @@ export class MoteurAdapter {
     // Build payload preserving referral attribution and fixed description
     const saasId = this.config.saasId || '167a0c84-ce3c-488c-8367-d2e649933f34';
     const appCode = this.config.appCode || 'demosaas';
+    const subscriberExtId =
+      request.subscriberExtId ||
+      request.companyId ||
+      (request.customer as any)?.id ||
+      'unknown';
+    const subscriberEmail = request.customer?.email || undefined;
+    const subscriberName = request.customer?.name || undefined;
+    const subscriberPhone = request.customer?.phone || undefined;
 
     const payload = {
       action: 'payments.collect',
       app_code: appCode,
       application_code: appCode,
       saas_id: saasId,
+      subscriber_ext_id: subscriberExtId,
+      subscriber_id: subscriberExtId,
+      subscriber_email: subscriberEmail,
+      subscriber_name: subscriberName,
+      subscriber_phone: subscriberPhone,
+      company_id: request.companyId,
+      plan_id: request.planId,
+      module_ids: request.moduleIds,
+      billing_cycle: request.billingCycle,
       description: MOTEUR_PAYMENT_DESCRIPTION,
       amount: request.amount,
       currency: request.currency,
       country: request.country,
       idempotency_key: request.idempotencyKey,
+      reference: request.idempotencyKey,
       metadata: {
         app_code: appCode,
         saas_id: saasId,
         company_id: request.companyId,
+        subscriber_ext_id: subscriberExtId,
         plan_id: request.planId,
         module_ids: request.moduleIds,
         billing_cycle: request.billingCycle,
@@ -109,7 +128,15 @@ export class MoteurAdapter {
         description: MOTEUR_PAYMENT_DESCRIPTION,
         ...(request.metadata || {}),
       },
-      customer: request.customer || {},
+      customer: {
+        id: request.customer?.id || subscriberExtId,
+        ext_id: subscriberExtId,
+        subscriber_ext_id: subscriberExtId,
+        name: subscriberName,
+        email: subscriberEmail,
+        phone: subscriberPhone,
+        ...(request.customer || {}),
+      },
       return_url: request.returnUrl,
       callback_url: request.callbackUrl,
     };
@@ -162,13 +189,28 @@ export class MoteurAdapter {
 
       return {
         success: true,
-        sessionId: json.session_id || json.id || '',
-        reference: json.reference || json.idempotency_key || request.idempotencyKey,
-        status: (json.status as any) || 'pending',
-        checkoutUrl: json.checkout_url || json.url,
-        qrCodeUrl: json.qr_code_url,
-        expiresAt: json.expires_at,
-        instructions: json.instructions,
+        sessionId:
+          json.session_id ||
+          json.id ||
+          json.data?.session_id ||
+          json.data?.id ||
+          '',
+        reference:
+          json.reference ||
+          json.idempotency_key ||
+          json.data?.reference ||
+          request.idempotencyKey,
+        status: (json.status as any) || (json.data?.status as any) || 'pending',
+        checkoutUrl:
+          json.checkout_url ||
+          json.url ||
+          json.data?.checkout_url ||
+          json.data?.url ||
+          json.payment_url ||
+          json.data?.payment_url,
+        qrCodeUrl: json.qr_code_url || json.data?.qr_code_url,
+        expiresAt: json.expires_at || json.data?.expires_at,
+        instructions: json.instructions || json.data?.instructions,
         raw: json,
       };
     } catch (err: any) {

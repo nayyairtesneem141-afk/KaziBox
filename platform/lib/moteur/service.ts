@@ -84,6 +84,7 @@ export class MoteurPaymentService {
       currency,
       country: params.country,
       companyId: params.companyId,
+      subscriberExtId: params.companyId,
       planId: params.planId,
       moduleIds: params.moduleIds,
       billingCycle: params.billingCycle,

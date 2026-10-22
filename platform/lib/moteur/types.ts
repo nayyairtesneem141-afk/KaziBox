@@ -86,6 +86,8 @@ export interface MoteurInitiatePaymentRequest {
   country: MoteurCountryCode;
   /** KaziBox workspace/company ID */
   companyId: string;
+  /** External subscriber identifier expected by Moteur engine (typically company ID) */
+  subscriberExtId?: string;
   /** Subscribed plan ID (e.g., 'single', 'bundle', 'all_access', 'custom') */
   planId: string;
   /** Module IDs to unlock upon payment success */
