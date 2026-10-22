@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
           ? 400
           : 502;
 
-      console.warn(`[Billing Checkout] Session initialization rejected for company ${targetCompanyId.slice(0, 8)}...: httpStatus=${httpStatus}, errorCode=${result.errorCode}, message=${result.errorMessage}`);
+      console.warn(`[Billing Checkout] Session initialization rejected for company ${targetCompanyId.slice(0, 8)}...: httpStatus=${httpStatus}, errorCode=${result.errorCode}, message=${result.errorMessage}, raw=${JSON.stringify(result.raw)}`);
 
       return NextResponse.json(
         {
@@ -150,6 +150,7 @@ export async function POST(req: NextRequest) {
           status: result.status,
           errorCode: result.errorCode,
           errorMessage: result.errorMessage,
+          raw: result.raw,
         },
         { status: httpStatus }
       );

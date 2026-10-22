@@ -94,7 +94,14 @@ export class MoteurAdapter {
     const subscriberEmail = request.customer?.email || undefined;
     const subscriberName = request.customer?.name || undefined;
     const subscriberPhone = request.customer?.phone || undefined;
-    const planKey = request.planKey || request.planId || 'single';
+    const planKey =
+      request.planKey ||
+      (request.planId === 'single'
+        ? 'starter'
+        : request.planId === 'bundle'
+        ? 'pro'
+        : request.planId) ||
+      'starter';
     const returnUrl = request.returnUrl || 'https://kazibox.com/billing';
     const callbackUrl = request.callbackUrl || undefined;
 
@@ -191,10 +198,30 @@ export class MoteurAdapter {
       const json = await response.json();
 
       if (!response.ok) {
-        const errorMsg =
+        const detailStr =
+          typeof json === 'object' && json !== null
+            ? json.details ||
+              json.detail ||
+              json.hint ||
+              json.reason ||
+              json.error_description ||
+              (typeof json.error === 'object' ? json.error?.message || json.error?.details : null)
+            : null;
+
+        const codeStr = json.code || (typeof json.error === 'object' ? json.error?.code : null);
+        const reqId = json.request_id || json.requestId;
+
+        const baseMsg =
           json.message ||
           (typeof json.error === 'string' ? json.error : json.error?.message) ||
           'Moteur payment session initialization failed';
+
+        const extraParts: string[] = [];
+        if (codeStr && codeStr !== `HTTP_${response.status}`) extraParts.push(`code: ${codeStr}`);
+        if (detailStr && detailStr !== baseMsg) extraParts.push(`détails: ${typeof detailStr === 'object' ? JSON.stringify(detailStr) : detailStr}`);
+        if (reqId) extraParts.push(`req_id: ${reqId}`);
+
+        const errorMsg = extraParts.length > 0 ? `${baseMsg} (${extraParts.join(' | ')})` : baseMsg;
 
         return {
           success: false,

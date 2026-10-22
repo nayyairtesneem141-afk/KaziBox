@@ -227,11 +227,17 @@ export async function startCheckout(params: CheckoutParams): Promise<{
 
       const data = await res.json();
       if (!res.ok || !data.success) {
+        const rawStr = data.raw && typeof data.raw === 'object' ? JSON.stringify(data.raw) : '';
+        const base = data.errorMessage || data.error || data.message || 'Échec de l’initialisation du paiement';
+        const displayError = rawStr && !base.includes(rawStr) && rawStr !== '{}'
+          ? `${base} [${rawStr}]`
+          : base;
+
         return {
           success: false,
           status: 'failed',
-          error: data.errorMessage || data.error || data.message || 'Échec de l’initialisation du paiement',
-          message: data.errorMessage || data.message,
+          error: displayError,
+          message: displayError,
         };
       }
 
