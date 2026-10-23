@@ -237,8 +237,12 @@ export class MoteurAdapter {
         status: (json.status as any) || (json.data?.status as any) || 'pending',
         checkoutUrl:
           json.checkout_url ||
+          json.redirect_url ||
+          json.redirectUrl ||
           json.url ||
           json.data?.checkout_url ||
+          json.data?.redirect_url ||
+          json.data?.redirectUrl ||
           json.data?.url ||
           json.payment_url ||
           json.data?.payment_url,
@@ -293,13 +297,25 @@ export class MoteurAdapter {
         headers['apikey'] = bearer;
       }
 
-      const response = await this.executeHttpRequest(
+      let response = await this.executeHttpRequest(
         endpoint,
         {
           method: 'GET',
           headers,
         }
       );
+
+      // Fallback: If direct identifier path returns 404, check confirm endpoint
+      if (response.status === 404) {
+        const altEndpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/confirm?reference=${identifier}`;
+        const altResponse = await this.executeHttpRequest(altEndpoint, {
+          method: 'GET',
+          headers,
+        });
+        if (altResponse.ok) {
+          response = altResponse;
+        }
+      }
 
       const json = await response.json();
 
@@ -313,22 +329,33 @@ export class MoteurAdapter {
       }
 
       const meta = json.metadata || {};
+      const rawStatus = String(json.status || json.data?.status || '').toLowerCase();
+      const normalizedStatus: 'pending' | 'succeeded' | 'failed' | 'expired' | 'refunded' =
+        rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid'
+          ? 'succeeded'
+          : rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected'
+          ? 'failed'
+          : rawStatus === 'expired'
+          ? 'expired'
+          : rawStatus === 'refunded'
+          ? 'refunded'
+          : 'pending';
 
       return {
         success: response.ok,
         reference: json.reference || query.reference,
         sessionId: json.session_id || query.sessionId,
-        status: json.status,
-        amount: Number(json.amount) || 0,
-        currency: json.currency || 'XOF',
-        companyId: meta.company_id || '',
-        planId: meta.plan_id || '',
-        moduleIds: Array.isArray(meta.module_ids) ? meta.module_ids : [],
-        billingCycle: meta.billing_cycle || 'monthly',
-        paidAt: json.paid_at || json.completed_at,
+        status: normalizedStatus,
+        amount: Number(json.amount || json.data?.amount) || 0,
+        currency: json.currency || json.data?.currency || 'XOF',
+        companyId: meta.company_id || json.company_id || json.companyId || '',
+        planId: meta.plan_id || json.plan_id || json.planId || '',
+        moduleIds: Array.isArray(meta.module_ids) ? meta.module_ids : Array.isArray(json.module_ids) ? json.module_ids : [],
+        billingCycle: meta.billing_cycle || json.billing_cycle || 'monthly',
+        paidAt: json.paid_at || json.completed_at || json.data?.paid_at,
         referralCode: meta.referral_code,
-        providerReference: json.provider_reference,
-        providerName: json.provider_name,
+        providerReference: json.provider_reference || json.data?.provider_reference,
+        providerName: json.provider_name || json.data?.provider_name,
         raw: json,
       };
     } catch (err: any) {

@@ -65,6 +65,9 @@ function BillingPageContent() {
   const [checkoutStage, setCheckoutStage] = useState<'form' | 'waiting' | 'success'>('form');
   const [successInvoiceId, setSuccessInvoiceId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPollingTimeout, setIsPollingTimeout] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [pollingErrorCount, setPollingErrorCount] = useState(0);
 
   const loadData = async () => {
     if (!workspace) return;
@@ -101,13 +104,88 @@ function BillingPageContent() {
     loadData();
   }, [workspace]);
 
-  // Handle return from interactive checkout (MockAdapter or live PSP redirect)
+  // Centralized payment status check with trusted backend verification
+  const checkStatus = async (ref: string): Promise<boolean> => {
+    if (!ref) return false;
+    try {
+      const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(ref)}`, {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        setPollingErrorCount((prev) => prev + 1);
+        return false;
+      }
+      const data = await res.json();
+      const rawStatus = String(data.status || '').toLowerCase();
+
+      if (rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid') {
+        const inv = data.invoiceId || (ref.startsWith('INV-') ? ref : `INV-${ref}`);
+        setSuccessInvoiceId(inv);
+        setCheckoutStage('success');
+        setIsPollingTimeout(false);
+        setPendingReference('');
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('kazibox_pending_checkout');
+        }
+        await loadData();
+        return true;
+      } else if (
+        rawStatus === 'failed' ||
+        rawStatus === 'cancelled' ||
+        rawStatus === 'rejected' ||
+        rawStatus === 'expired'
+      ) {
+        setCheckoutStage('form');
+        setIsPollingTimeout(false);
+        setPendingReference('');
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('kazibox_pending_checkout');
+        }
+        alert(data.errorMessage || data.message || t('billing.payment_failed'));
+        return true;
+      }
+      return false; // Still pending
+    } catch {
+      setPollingErrorCount((prev) => prev + 1);
+      return false;
+    }
+  };
+
+  // Recover pending checkout state across page refresh from persisted storage
   useEffect(() => {
-    if (returnStatus === 'completed' || returnStatus === 'succeeded') {
-      const invoiceId = checkoutId ? `INV-${checkoutId}` : `INV-MOCK-${Date.now()}`;
-      setSuccessInvoiceId(invoiceId);
-      setCheckoutStage('success');
-      loadData();
+    if (typeof window === 'undefined') return;
+
+    try {
+      const stored = sessionStorage.getItem('kazibox_pending_checkout');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        const ageMs = Date.now() - (parsed.timestamp || 0);
+        // Recover if session is younger than 15 minutes
+        if (parsed.reference && ageMs < 15 * 60 * 1000) {
+          setPendingReference(parsed.reference);
+          setCheckoutStage('waiting');
+          // Run immediate active check
+          checkStatus(parsed.reference).then((isTerminal) => {
+            if (!isTerminal) {
+              setIsPollingTimeout(false);
+            }
+          });
+        } else {
+          sessionStorage.removeItem('kazibox_pending_checkout');
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  // Handle return from interactive checkout redirect with trusted verification
+  useEffect(() => {
+    const targetRef = checkoutId || searchParams.get('reference') || pendingReference;
+    if (returnStatus && targetRef) {
+      setCheckoutStage('waiting');
+      setPendingReference(targetRef);
+      checkStatus(targetRef);
       if (typeof window !== 'undefined' && window.history.replaceState) {
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
@@ -167,30 +245,24 @@ function BillingPageContent() {
     }
   };
 
-  // Status Polling Effect for Moteur Payment Lifecycle
+  // Status Polling Effect with timeout & terminal state management
   useEffect(() => {
-    if (checkoutStage !== 'waiting' || !pendingReference) return;
+    if (checkoutStage !== 'waiting' || !pendingReference || isPollingTimeout) return;
 
     let isMounted = true;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(pendingReference)}`, {
-          credentials: 'include',
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!isMounted) return;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 * 3s = 90s timeout
 
-        if (data.status === 'succeeded') {
-          setSuccessInvoiceId(`INV-${pendingReference}`);
-          setCheckoutStage('success');
-          await loadData();
-        } else if (data.status === 'failed' || data.status === 'expired') {
-          alert(t('billing.payment_failed'));
-          setCheckoutStage('form');
-        }
-      } catch {
-        // Continue polling
+    const interval = setInterval(async () => {
+      attempts += 1;
+      const isTerminal = await checkStatus(pendingReference);
+      if (!isMounted) return;
+
+      if (isTerminal) {
+        clearInterval(interval);
+      } else if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        setIsPollingTimeout(true);
       }
     }, 3000);
 
@@ -198,12 +270,39 @@ function BillingPageContent() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [checkoutStage, pendingReference]);
+  }, [checkoutStage, pendingReference, isPollingTimeout]);
+
+  const handleCancelCheckout = () => {
+    setCheckoutStage('form');
+    setPendingReference('');
+    setIsPollingTimeout(false);
+    setPollingErrorCount(0);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.removeItem('kazibox_pending_checkout');
+      } catch {}
+    }
+  };
+
+  const handleManualCheck = async () => {
+    if (!pendingReference || isCheckingStatus) return;
+    setIsCheckingStatus(true);
+    try {
+      const isTerminal = await checkStatus(pendingReference);
+      if (!isTerminal) {
+        alert("Le paiement est toujours en attente de validation par l'opérateur. Veuillez patienter quelques instants.");
+      }
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
 
   const handleExecuteCheckout = async () => {
     if (!workspace || isSubmitting) return;
 
     setIsSubmitting(true);
+    setIsPollingTimeout(false);
+    setPollingErrorCount(0);
 
     const currencyMap: Record<string, string> = {
       CD: 'USD',
@@ -232,15 +331,36 @@ function BillingPageContent() {
       });
 
       if (result.success) {
+        const ref = result.reference || `KZ-${Date.now()}`;
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(
+              'kazibox_pending_checkout',
+              JSON.stringify({
+                reference: ref,
+                timestamp: Date.now(),
+                companyId: workspace.company_id,
+                planId: selectedPlanId,
+              })
+            );
+          } catch {}
+        }
+
         if (result.checkoutUrl) {
           window.location.href = result.checkoutUrl;
           return;
         }
-        const ref = result.reference || `KZ-${Date.now()}`;
+
         setPendingReference(ref);
+        setIsPollingTimeout(false);
         setCheckoutStage('waiting');
       } else {
         setPendingReference('');
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.removeItem('kazibox_pending_checkout');
+          } catch {}
+        }
         alert(result.error || result.message || t('billing.payment_failed'));
         setCheckoutStage('form');
       }
@@ -527,36 +647,72 @@ function BillingPageContent() {
           {/* Waiting for approval overlay */}
           {checkoutStage === 'waiting' && (
             <Card padding="lg" className="text-center py-16 max-w-xl mx-auto border-2 border-[var(--kazibox-primary,#6D28D9)]">
-              <div className="w-20 h-20 rounded-full bg-[var(--kazibox-primary-soft,#F3E8FF)] text-[var(--kazibox-primary,#6D28D9)] flex items-center justify-center text-3xl mx-auto mb-6 animate-pulse">
-                ⚡
-              </div>
-              <Badge variant="purple" size="md" className="mb-3">
-                {t('billing.moteur_infrastructure_label')}
-              </Badge>
-              <h3 className="text-2xl font-black text-[#1F2937] mb-2">
-                {t('billing.waiting_approval_title')}
-              </h3>
-              <p className="text-sm text-[#4B5563] max-w-md mx-auto leading-relaxed mb-4">
-                {paymentMethod === 'mobile_money'
-                  ? `Une demande de paiement sécurisée de ${calculateTotal().toLocaleString()} ${country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} (Libellé: KaziBox) a été initiée via Moteur au ${phoneNumber}.`
-                  : `Traitement sécurisé de votre carte bancaire ${cardNumber.slice(-4)} via l'infrastructure Moteur...`}
-              </p>
-              <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed mb-6">
-                En attente de la confirmation cryptographique du paiement. Vos modules seront débloqués dès validation.
-              </p>
-              <div className="w-12 h-12 border-4 border-[var(--kazibox-primary,#6D28D9)] border-t-transparent rounded-full animate-spin mx-auto mb-6" />
-              <div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setCheckoutStage('form');
-                    setPendingReference('');
-                  }}
-                >
-                  Annuler / Modifier
-                </Button>
-              </div>
+              {isPollingTimeout ? (
+                <>
+                  <div className="w-20 h-20 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-3xl mx-auto mb-6">
+                    ⏳
+                  </div>
+                  <Badge variant="yellow" size="md" className="mb-3">
+                    Délai de confirmation dépassé
+                  </Badge>
+                  <h3 className="text-2xl font-black text-[#1F2937] mb-2">
+                    Confirmation en cours
+                  </h3>
+                  <p className="text-sm text-[#4B5563] max-w-md mx-auto leading-relaxed mb-4">
+                    La confirmation prend plus de temps que prévu auprès de votre opérateur. Si vous avez validé la transaction sur votre téléphone, cliquez ci-dessous pour actualiser l'état. Vos modules seront débloqués dès confirmation.
+                  </p>
+                  <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed mb-6">
+                    Référence : <span className="font-mono font-bold text-gray-700">{pendingReference}</span>
+                  </p>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={handleManualCheck}
+                      disabled={isCheckingStatus}
+                    >
+                      {isCheckingStatus ? 'Vérification...' : '🔄 Vérifier à nouveau'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="md"
+                      onClick={handleCancelCheckout}
+                    >
+                      Annuler / Modifier
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-20 h-20 rounded-full bg-[var(--kazibox-primary-soft,#F3E8FF)] text-[var(--kazibox-primary,#6D28D9)] flex items-center justify-center text-3xl mx-auto mb-6 animate-pulse">
+                    ⚡
+                  </div>
+                  <Badge variant="purple" size="md" className="mb-3">
+                    {t('billing.moteur_infrastructure_label')}
+                  </Badge>
+                  <h3 className="text-2xl font-black text-[#1F2937] mb-2">
+                    {t('billing.waiting_approval_title')}
+                  </h3>
+                  <p className="text-sm text-[#4B5563] max-w-md mx-auto leading-relaxed mb-4">
+                    {paymentMethod === 'mobile_money'
+                      ? `Une demande de paiement sécurisée de ${calculateTotal().toLocaleString()} ${country === 'CD' ? 'USD' : (country === 'CM' ? 'XAF' : 'XOF')} (Libellé: KaziBox) a été initiée via Moteur au ${phoneNumber}.`
+                      : `Traitement sécurisé de votre carte bancaire ${cardNumber.slice(-4)} via l'infrastructure Moteur...`}
+                  </p>
+                  <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed mb-6">
+                    En attente de la confirmation cryptographique du paiement. Vos modules seront débloqués dès validation.
+                  </p>
+                  <div className="w-12 h-12 border-4 border-[var(--kazibox-primary,#6D28D9)] border-t-transparent rounded-full animate-spin mx-auto mb-6" />
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancelCheckout}
+                    >
+                      Annuler / Modifier
+                    </Button>
+                  </div>
+                </>
+              )}
             </Card>
           )}
 

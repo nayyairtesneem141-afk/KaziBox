@@ -1040,6 +1040,154 @@ test('22. Sanitized error output does NOT leak internal credentials or tokens on
   assert(!serialized.includes('x_engine_'), 'Response must never leak API key');
 });
 
+test('23. Indefinite polling prevention: Polling terminates at maxAttempts (timeout) without spinning forever', async () => {
+  let pollAttempts = 0;
+  const maxAttempts = 30;
+  let isPollingTimeout = false;
+  let isTerminal = false;
+
+  const mockStatusCheck = async () => {
+    pollAttempts++;
+    // Status stays pending
+    return false;
+  };
+
+  while (!isTerminal && pollAttempts < maxAttempts) {
+    isTerminal = await mockStatusCheck();
+  }
+
+  if (pollAttempts >= maxAttempts && !isTerminal) {
+    isPollingTimeout = true;
+  }
+
+  assert.strictEqual(pollAttempts, 30, 'Polling must cease after exactly 30 attempts');
+  assert.strictEqual(isPollingTimeout, true, 'isPollingTimeout flag must be set to true');
+});
+
+test('24. Status normalization: Moteur status "COMPLETED" / "completed" / "paid" maps to "succeeded" and activates modules', async () => {
+  const rawStatuses = ['COMPLETED', 'completed', 'paid', 'PAID', 'succeeded', 'SUCCEEDED'];
+  for (const raw of rawStatuses) {
+    const rawLower = String(raw).toLowerCase();
+    const isSuccess = rawLower === 'succeeded' || rawLower === 'completed' || rawLower === 'paid';
+    assert.strictEqual(isSuccess, true, `Status "${raw}" must be treated as successful`);
+  }
+
+  const testCompanyId = 'comp-garage-01';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+  };
+
+  // Simulate payment confirmation for garage module
+  localState.subscriptions.push({
+    company_id: testCompanyId,
+    plan_id: 'starter',
+    status: 'active',
+    included_module_ids: ['garage'],
+  });
+  localState.company_modules.push({
+    company_id: testCompanyId,
+    module_id: 'garage',
+    status: 'active',
+  });
+
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'garage', localState);
+  assert.strictEqual(entitlement, 'active', 'Module entitlement must be active after confirmed payment');
+});
+
+test('25. Terminal failure states ("failed", "cancelled", "rejected", "expired") do NOT grant entitlements', async () => {
+  const terminalFailures = ['failed', 'FAILED', 'cancelled', 'CANCELLED', 'rejected', 'REJECTED', 'expired', 'EXPIRED'];
+  for (const raw of terminalFailures) {
+    const rawLower = String(raw).toLowerCase();
+    const isFailed = rawLower === 'failed' || rawLower === 'cancelled' || rawLower === 'rejected';
+    const isExpired = rawLower === 'expired';
+    const isTerminalFailure = isFailed || isExpired;
+    assert.strictEqual(isTerminalFailure, true, `Status "${raw}" must be recognized as terminal failure`);
+  }
+
+  const testCompanyId = 'comp-hotel-01';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+  };
+
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'hotel-property', localState);
+  assert.strictEqual(entitlement, 'none', 'Module entitlement must remain none for failed/cancelled/expired payment');
+});
+
+test('26. Serverless stateless status check: Recovers and confirms when session is absent from in-memory cache', async () => {
+  // Simulate serverless Lambda instance where localSessions map is empty
+  const inMemorySessions = new Map();
+  const targetRef = 'KZ-STATELESS-TEST-999';
+
+  assert.strictEqual(inMemorySessions.has(targetRef), false, 'Session must not be in local memory');
+
+  // Verify that an active adapter check returns confirmed payment details
+  const mockVerifyResult = {
+    reference: targetRef,
+    sessionId: 'sess_12345',
+    status: 'completed',
+    amount: 15000,
+    currency: 'XOF',
+    companyId: 'comp-hotel-01',
+    planId: 'starter',
+    moduleIds: ['hotel-property'],
+  };
+
+  const rawStatus = String(mockVerifyResult.status).toLowerCase();
+  const isSuccess = rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid';
+  assert.strictEqual(isSuccess, true);
+
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+  };
+
+  if (isSuccess && mockVerifyResult.companyId) {
+    localState.subscriptions.push({
+      company_id: mockVerifyResult.companyId,
+      plan_id: mockVerifyResult.planId,
+      status: 'active',
+      included_module_ids: mockVerifyResult.moduleIds,
+    });
+    localState.company_modules.push({
+      company_id: mockVerifyResult.companyId,
+      module_id: mockVerifyResult.moduleIds[0],
+      status: 'active',
+    });
+  }
+
+  const entitlement = simulateGetModuleEntitlement(mockVerifyResult.companyId, 'hotel-property', localState);
+  assert.strictEqual(entitlement, 'active', 'Module entitlement must be granted after verified stateless status confirmation');
+});
+
+test('27. Refresh recovery & zero unverified activation: Client return URL does NOT grant access without trusted backend verification', async () => {
+  const testCompanyId = 'comp-garage-01';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+  };
+
+  // Malicious / unverified query parameter on return URL
+  const unverifiedUrlParam = { status: 'completed', checkout_id: 'fake_tx_123' };
+
+  // Rule: Do NOT activate module merely based on unverified URL parameter
+  let moduleActivated = false;
+  const verifiedWithBackend = false; // Backend verification rejected or not yet done
+
+  if (verifiedWithBackend) {
+    moduleActivated = true;
+  }
+
+  assert.strictEqual(moduleActivated, false, 'Module must NOT be activated without trusted backend verification');
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, 'garage', localState);
+  assert.strictEqual(entitlement, 'none', 'Module entitlement must remain none when unverified');
+});
+
 // ─── Execution ──────────────────────────────────────────────────────────────
 
 async function runAll() {

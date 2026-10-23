@@ -1034,25 +1034,32 @@ export class MoteurPaymentService {
       if (localSession.status === 'pending' && this.adapter.isReady()) {
         try {
           const verifyResult = await this.adapter.verifyPayment({ reference });
-          if (verifyResult.status === 'succeeded') {
+          const rawStatus = String(verifyResult.status || '').toLowerCase();
+          const isSuccess = rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid';
+          const isFailed = rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected';
+          const isExpired = rawStatus === 'expired';
+
+          if (isSuccess) {
             await this.handlePaymentConfirmation({
               reference,
               sessionId: verifyResult.sessionId,
               companyId: verifyResult.companyId || localSession.companyId,
               planId: verifyResult.planId || localSession.planId,
-              moduleIds: verifyResult.moduleIds || localSession.moduleIds,
+              moduleIds: verifyResult.moduleIds?.length ? verifyResult.moduleIds : localSession.moduleIds,
               billingCycle: verifyResult.billingCycle || localSession.billingCycle,
               amount: verifyResult.amount || localSession.amount,
               currency: verifyResult.currency || localSession.currency,
               paidAt: verifyResult.paidAt,
             });
             localSession.status = 'succeeded';
-          } else if (verifyResult.status === 'failed') {
+          } else if (isFailed) {
             await this.handlePaymentFailure({
               reference,
               companyId: localSession.companyId,
             });
             localSession.status = 'failed';
+          } else if (isExpired) {
+            localSession.status = 'expired';
           }
         } catch {
           // Keep local pending status
@@ -1080,9 +1087,14 @@ export class MoteurPaymentService {
             .maybeSingle();
 
           if (dbPayment) {
+            const rawStatus = String(dbPayment.status || '').toLowerCase();
+            const normalizedStatus =
+              rawStatus === 'paid' || rawStatus === 'succeeded' || rawStatus === 'completed'
+                ? 'succeeded'
+                : (dbPayment.status as any);
             return {
               reference,
-              status: dbPayment.status === 'paid' ? 'succeeded' : (dbPayment.status as any),
+              status: normalizedStatus,
               companyId: dbPayment.company_id,
               amount: dbPayment.amount,
               currency: dbPayment.currency,
@@ -1097,13 +1109,71 @@ export class MoteurPaymentService {
     const store = getStore();
     const localPayment = store.payments.find((p) => p.invoiceNumber === reference || p.id === reference);
     if (localPayment) {
+      const rawStatus = String(localPayment.status || '').toLowerCase();
+      const normalizedStatus =
+        rawStatus === 'paid' || rawStatus === 'succeeded' || rawStatus === 'completed'
+          ? 'succeeded'
+          : (localPayment.status as any);
       return {
         reference,
-        status: localPayment.status === 'paid' ? 'succeeded' : (localPayment.status as any),
+        status: normalizedStatus,
         companyId: localPayment.companyId,
         amount: localPayment.amount,
         currency: localPayment.currency,
       };
+    }
+
+    // Serverless stateless verification: query Moteur directly if session not in local memory
+    if (this.adapter.isReady()) {
+      try {
+        const verifyResult = await this.adapter.verifyPayment({ reference });
+        const rawStatus = String(verifyResult.status || '').toLowerCase();
+        const isSuccess = rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid';
+        const isFailed = rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected';
+        const isExpired = rawStatus === 'expired';
+
+        if (isSuccess && (verifyResult.companyId || verifyResult.planId)) {
+          await this.handlePaymentConfirmation({
+            reference,
+            sessionId: verifyResult.sessionId,
+            companyId: verifyResult.companyId,
+            planId: verifyResult.planId || 'starter',
+            moduleIds: verifyResult.moduleIds || [],
+            billingCycle: verifyResult.billingCycle || 'monthly',
+            amount: verifyResult.amount,
+            currency: verifyResult.currency,
+            paidAt: verifyResult.paidAt,
+          });
+          return {
+            reference,
+            status: 'succeeded',
+            companyId: verifyResult.companyId,
+            planId: verifyResult.planId,
+            amount: verifyResult.amount,
+            currency: verifyResult.currency,
+          };
+        } else if (isFailed) {
+          if (verifyResult.companyId) {
+            await this.handlePaymentFailure({
+              reference,
+              companyId: verifyResult.companyId,
+            });
+          }
+          return {
+            reference,
+            status: 'failed',
+            companyId: verifyResult.companyId,
+          };
+        } else if (isExpired) {
+          return {
+            reference,
+            status: 'expired',
+            companyId: verifyResult.companyId,
+          };
+        }
+      } catch {
+        // Fall through to pending
+      }
     }
 
     return {
