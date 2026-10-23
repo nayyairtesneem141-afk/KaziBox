@@ -139,8 +139,7 @@ export class MoteurAdapter {
         module_ids: request.moduleIds,
         module_keys: request.moduleIds,
         billing_cycle: request.billingCycle,
-        // Preserve referral attribution for Moteur ambassador commission calculations
-        referral_code: request.referralCode || null,
+        ...(request.referralCode ? { referral_code: request.referralCode } : {}),
         description: MOTEUR_PAYMENT_DESCRIPTION,
         ...(request.metadata || {}),
       },

@@ -21,6 +21,9 @@ function BillingPageContent() {
   const preselectedModule = searchParams.get('module');
   const requestedAction = searchParams.get('action'); // 'renew' | 'upgrade'
   const preselectedPlan = searchParams.get('plan') || 'single';
+  const checkoutId = searchParams.get('checkout_id');
+  const returnStatus = searchParams.get('status');
+  const returnProvider = searchParams.get('provider');
 
   const { user, workspace } = useSession();
   const { t, language } = useTranslation();
@@ -97,6 +100,20 @@ function BillingPageContent() {
   useEffect(() => {
     loadData();
   }, [workspace]);
+
+  // Handle return from interactive checkout (MockAdapter or live PSP redirect)
+  useEffect(() => {
+    if (returnStatus === 'completed' || returnStatus === 'succeeded') {
+      const invoiceId = checkoutId ? `INV-${checkoutId}` : `INV-MOCK-${Date.now()}`;
+      setSuccessInvoiceId(invoiceId);
+      setCheckoutStage('success');
+      loadData();
+      if (typeof window !== 'undefined' && window.history.replaceState) {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
+  }, [returnStatus, checkoutId]);
 
   // Handle plan calculation
   const publishedModules = modules.filter((m) => m.status === 'published');
@@ -215,6 +232,10 @@ function BillingPageContent() {
       });
 
       if (result.success) {
+        if (result.checkoutUrl) {
+          window.location.href = result.checkoutUrl;
+          return;
+        }
         const ref = result.reference || `KZ-${Date.now()}`;
         setPendingReference(ref);
         setCheckoutStage('waiting');
