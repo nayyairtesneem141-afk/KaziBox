@@ -205,6 +205,7 @@ export async function startCheckout(params: CheckoutParams): Promise<{
         headers['Authorization'] = `Bearer ${token}`;
       }
 
+      const clientReturnUrl = typeof window !== 'undefined' ? `${window.location.origin}/billing` : undefined;
       const res = await fetch('/api/v1/billing/checkout', {
         method: 'POST',
         credentials: 'include',
@@ -212,12 +213,15 @@ export async function startCheckout(params: CheckoutParams): Promise<{
         body: JSON.stringify({
           companyId: params.companyId,
           planId: params.planId,
+          planKey: params.planId === 'single' ? 'starter' : params.planId === 'bundle' ? 'pro' : params.planId,
           billingCycle: params.billingCycle,
           moduleIds: params.moduleIds,
           country: params.country || 'CI',
           amount: params.amount,
           currency: params.currency || 'XOF',
           referralCode: params.referralCode,
+          returnUrl: clientReturnUrl,
+          return_url: clientReturnUrl,
           customer: {
             phone: params.phoneNumber,
             name: params.cardName,

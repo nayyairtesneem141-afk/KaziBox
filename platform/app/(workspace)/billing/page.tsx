@@ -105,10 +105,41 @@ function BillingPageContent() {
   }, [workspace]);
 
   // Centralized payment status check with trusted backend verification
-  const checkStatus = async (ref: string): Promise<boolean> => {
+  const checkStatus = async (
+    ref: string,
+    extra?: {
+      checkoutId?: string;
+      status?: string;
+      planId?: string;
+      moduleIds?: string[];
+    }
+  ): Promise<boolean> => {
     if (!ref) return false;
     try {
-      const res = await fetch(`/api/v1/billing/status?reference=${encodeURIComponent(ref)}`, {
+      let url = `/api/v1/billing/status?reference=${encodeURIComponent(ref)}`;
+      if (workspace?.company_id) {
+        url += `&companyId=${encodeURIComponent(workspace.company_id)}`;
+      }
+      if (extra?.checkoutId) {
+        url += `&checkoutId=${encodeURIComponent(extra.checkoutId)}`;
+      }
+      if (extra?.status) {
+        url += `&returnStatus=${encodeURIComponent(extra.status)}`;
+      }
+      const activePlan = extra?.planId || selectedPlanId;
+      if (activePlan) {
+        url += `&planId=${encodeURIComponent(activePlan)}`;
+      }
+      const activeModules = extra?.moduleIds || (selectedModuleIds && selectedModuleIds.length > 0 ? selectedModuleIds : []);
+      if (activeModules.length > 0) {
+        url += `&moduleIds=${encodeURIComponent(activeModules.join(','))}`;
+      }
+      const providerParam = searchParams.get('provider');
+      if (providerParam) {
+        url += `&provider=${encodeURIComponent(providerParam)}`;
+      }
+
+      const res = await fetch(url, {
         credentials: 'include',
       });
       if (!res.ok) {
@@ -164,8 +195,12 @@ function BillingPageContent() {
         if (parsed.reference && ageMs < 15 * 60 * 1000) {
           setPendingReference(parsed.reference);
           setCheckoutStage('waiting');
-          // Run immediate active check
-          checkStatus(parsed.reference).then((isTerminal) => {
+          // Run immediate active check with stored context
+          checkStatus(parsed.reference, {
+            checkoutId: parsed.sessionId,
+            planId: parsed.planId,
+            moduleIds: parsed.moduleIds,
+          }).then((isTerminal) => {
             if (!isTerminal) {
               setIsPollingTimeout(false);
             }
@@ -181,11 +216,35 @@ function BillingPageContent() {
 
   // Handle return from interactive checkout redirect with trusted verification
   useEffect(() => {
-    const targetRef = checkoutId || searchParams.get('reference') || pendingReference;
-    if (returnStatus && targetRef) {
+    let storedPendingRef = '';
+    let storedSessionId = '';
+    let storedPlanId = '';
+    let storedModuleIds: string[] = [];
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = sessionStorage.getItem('kazibox_pending_checkout');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          storedPendingRef = parsed.reference || '';
+          storedSessionId = parsed.sessionId || '';
+          storedPlanId = parsed.planId || '';
+          storedModuleIds = parsed.moduleIds || [];
+        }
+      } catch {}
+    }
+
+    const effectiveRef = storedPendingRef || searchParams.get('reference') || checkoutId || pendingReference;
+
+    if (returnStatus && (effectiveRef || checkoutId)) {
       setCheckoutStage('waiting');
+      const targetRef = effectiveRef || checkoutId || '';
       setPendingReference(targetRef);
-      checkStatus(targetRef);
+      checkStatus(targetRef, {
+        checkoutId: checkoutId || storedSessionId || undefined,
+        status: returnStatus,
+        planId: storedPlanId || selectedPlanId,
+        moduleIds: storedModuleIds.length > 0 ? storedModuleIds : selectedModuleIds,
+      });
       if (typeof window !== 'undefined' && window.history.replaceState) {
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
@@ -334,13 +393,16 @@ function BillingPageContent() {
         const ref = result.reference || `KZ-${Date.now()}`;
         if (typeof window !== 'undefined') {
           try {
+            const targetModules = selectedPlanId === 'all_access' ? publishedModules.map((m) => m.id) : selectedModuleIds;
             sessionStorage.setItem(
               'kazibox_pending_checkout',
               JSON.stringify({
                 reference: ref,
+                sessionId: result.sessionId,
                 timestamp: Date.now(),
                 companyId: workspace.company_id,
                 planId: selectedPlanId,
+                moduleIds: targetModules,
               })
             );
           } catch {}

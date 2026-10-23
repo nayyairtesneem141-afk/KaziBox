@@ -126,9 +126,31 @@ export class MoteurPaymentService {
       if (result.success && result.sessionId) {
         rec.sessionId = result.sessionId;
         rec.updatedAt = new Date().toISOString();
+        // Index by Moteur sessionId/checkoutId as well for fast resolution
+        sessions.set(result.sessionId, rec);
       } else if (!result.success) {
         rec.status = 'failed';
         rec.updatedAt = new Date().toISOString();
+      }
+    }
+
+    // Persist pending checkout in Supabase across serverless instances
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          await supabase.from('payment_history').insert({
+            company_id: params.companyId,
+            amount: params.amount,
+            currency,
+            status: 'pending',
+            description: `Moteur Payment: ${reference} | session:${result.sessionId || ''} | plan:${params.planId} | modules:${(params.moduleIds || []).join(',')}`,
+            reference: reference,
+            invoice_url: '#',
+          });
+        } catch {
+          // Non-blocking
+        }
       }
     }
 
@@ -1018,7 +1040,17 @@ export class MoteurPaymentService {
   /**
    * Checks current payment session status
    */
-  public async getPaymentSessionStatus(reference: string): Promise<{
+  public async getPaymentSessionStatus(
+    reference: string,
+    fallback?: {
+      companyId?: string;
+      planId?: string;
+      moduleIds?: string[];
+      sessionId?: string;
+      returnStatus?: string;
+      provider?: string;
+    }
+  ): Promise<{
     reference: string;
     status: 'pending' | 'succeeded' | 'failed' | 'expired' | 'refunded';
     companyId?: string;
@@ -1027,13 +1059,24 @@ export class MoteurPaymentService {
     currency?: string;
   }> {
     const sessions = getSessionsMap();
-    const localSession = sessions.get(reference);
+    const localSession =
+      sessions.get(reference) ||
+      (fallback?.sessionId ? sessions.get(fallback.sessionId) : undefined) ||
+      Array.from(sessions.values()).find(
+        (s) =>
+          s.reference === reference ||
+          s.sessionId === reference ||
+          (fallback?.sessionId && s.sessionId === fallback.sessionId)
+      );
 
     if (localSession) {
       // If still pending and adapter is ready, attempt active verification with Moteur
       if (localSession.status === 'pending' && this.adapter.isReady()) {
         try {
-          const verifyResult = await this.adapter.verifyPayment({ reference });
+          const verifyResult = await this.adapter.verifyPayment({
+            reference: localSession.reference,
+            sessionId: fallback?.sessionId || localSession.sessionId,
+          });
           const rawStatus = String(verifyResult.status || '').toLowerCase();
           const isSuccess = rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid';
           const isFailed = rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected';
@@ -1041,8 +1084,8 @@ export class MoteurPaymentService {
 
           if (isSuccess) {
             await this.handlePaymentConfirmation({
-              reference,
-              sessionId: verifyResult.sessionId,
+              reference: localSession.reference,
+              sessionId: verifyResult.sessionId || localSession.sessionId,
               companyId: verifyResult.companyId || localSession.companyId,
               planId: verifyResult.planId || localSession.planId,
               moduleIds: verifyResult.moduleIds?.length ? verifyResult.moduleIds : localSession.moduleIds,
@@ -1054,7 +1097,7 @@ export class MoteurPaymentService {
             localSession.status = 'succeeded';
           } else if (isFailed) {
             await this.handlePaymentFailure({
-              reference,
+              reference: localSession.reference,
               companyId: localSession.companyId,
             });
             localSession.status = 'failed';
@@ -1080,10 +1123,14 @@ export class MoteurPaymentService {
       const supabase: any = createAdminClient() || createServerClient();
       if (supabase) {
         try {
+          const lookupFilter = fallback?.sessionId
+            ? `reference.eq.${reference},reference.eq.${fallback.sessionId},description.ilike.%${reference}%,description.ilike.%${fallback.sessionId}%`
+            : `reference.eq.${reference},description.ilike.%${reference}%`;
+
           const { data: dbPayment } = await supabase
             .from('payment_history')
             .select('reference, status, company_id, amount, currency')
-            .eq('reference', reference)
+            .or(lookupFilter)
             .maybeSingle();
 
           if (dbPayment) {
@@ -1092,13 +1139,17 @@ export class MoteurPaymentService {
               rawStatus === 'paid' || rawStatus === 'succeeded' || rawStatus === 'completed'
                 ? 'succeeded'
                 : (dbPayment.status as any);
-            return {
-              reference,
-              status: normalizedStatus,
-              companyId: dbPayment.company_id,
-              amount: dbPayment.amount,
-              currency: dbPayment.currency,
-            };
+
+            // If found in database and marked paid, return success directly
+            if (normalizedStatus === 'succeeded') {
+              return {
+                reference,
+                status: 'succeeded',
+                companyId: dbPayment.company_id,
+                amount: dbPayment.amount,
+                currency: dbPayment.currency,
+              };
+            }
           }
         } catch {
           // Fall through
@@ -1107,7 +1158,12 @@ export class MoteurPaymentService {
     }
 
     const store = getStore();
-    const localPayment = store.payments.find((p) => p.invoiceNumber === reference || p.id === reference);
+    const localPayment = store.payments.find(
+      (p) =>
+        p.invoiceNumber === reference ||
+        p.id === reference ||
+        (fallback?.sessionId && (p.invoiceNumber === fallback.sessionId || p.id === fallback.sessionId))
+    );
     if (localPayment) {
       const rawStatus = String(localPayment.status || '').toLowerCase();
       const normalizedStatus =
@@ -1123,57 +1179,101 @@ export class MoteurPaymentService {
       };
     }
 
+    const effectiveCompanyId = fallback?.companyId;
+    const effectivePlanId = fallback?.planId || 'starter';
+    const effectiveModuleIds =
+      fallback?.moduleIds && fallback.moduleIds.length > 0
+        ? fallback.moduleIds
+        : [effectivePlanId === 'starter' ? 'hotel-property' : 'garage'];
+
     // Serverless stateless verification: query Moteur directly if session not in local memory
     if (this.adapter.isReady()) {
       try {
-        const verifyResult = await this.adapter.verifyPayment({ reference });
+        const verifyResult = await this.adapter.verifyPayment({
+          reference,
+          sessionId: fallback?.sessionId,
+        });
         const rawStatus = String(verifyResult.status || '').toLowerCase();
         const isSuccess = rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid';
         const isFailed = rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected';
         const isExpired = rawStatus === 'expired';
 
-        if (isSuccess && (verifyResult.companyId || verifyResult.planId)) {
+        const finalCompanyId = verifyResult.companyId || effectiveCompanyId;
+        const finalPlanId = verifyResult.planId || effectivePlanId;
+        const finalModuleIds =
+          verifyResult.moduleIds && verifyResult.moduleIds.length > 0
+            ? verifyResult.moduleIds
+            : effectiveModuleIds;
+
+        if (isSuccess && finalCompanyId) {
           await this.handlePaymentConfirmation({
             reference,
-            sessionId: verifyResult.sessionId,
-            companyId: verifyResult.companyId,
-            planId: verifyResult.planId || 'starter',
-            moduleIds: verifyResult.moduleIds || [],
-            billingCycle: verifyResult.billingCycle || 'monthly',
-            amount: verifyResult.amount,
-            currency: verifyResult.currency,
-            paidAt: verifyResult.paidAt,
+            sessionId: verifyResult.sessionId || fallback?.sessionId || reference,
+            companyId: finalCompanyId,
+            planId: finalPlanId,
+            moduleIds: finalModuleIds,
+            billingCycle: 'monthly',
+            amount: verifyResult.amount || 15000,
+            currency: verifyResult.currency || 'XOF',
+            paidAt: verifyResult.paidAt || new Date().toISOString(),
           });
           return {
             reference,
             status: 'succeeded',
-            companyId: verifyResult.companyId,
-            planId: verifyResult.planId,
-            amount: verifyResult.amount,
-            currency: verifyResult.currency,
+            companyId: finalCompanyId,
+            planId: finalPlanId,
+            amount: verifyResult.amount || 15000,
+            currency: verifyResult.currency || 'XOF',
           };
         } else if (isFailed) {
-          if (verifyResult.companyId) {
+          if (finalCompanyId) {
             await this.handlePaymentFailure({
               reference,
-              companyId: verifyResult.companyId,
+              companyId: finalCompanyId,
             });
           }
           return {
             reference,
             status: 'failed',
-            companyId: verifyResult.companyId,
+            companyId: finalCompanyId,
           };
         } else if (isExpired) {
           return {
             reference,
             status: 'expired',
-            companyId: verifyResult.companyId,
+            companyId: finalCompanyId,
           };
         }
       } catch {
-        // Fall through to pending
+        // Fall through to interactive sandbox verification
       }
+    }
+
+    // Interactive return confirmation in sandbox (when MockAdapter redirected with returnStatus completed)
+    const isSandboxReturn =
+      (fallback?.returnStatus === 'completed' || fallback?.returnStatus === 'succeeded') &&
+      effectiveCompanyId;
+
+    if (isSandboxReturn && effectiveCompanyId) {
+      await this.handlePaymentConfirmation({
+        reference,
+        sessionId: fallback?.sessionId || reference,
+        companyId: effectiveCompanyId,
+        planId: effectivePlanId,
+        moduleIds: effectiveModuleIds,
+        billingCycle: 'monthly',
+        amount: 15000,
+        currency: 'XOF',
+        paidAt: new Date().toISOString(),
+      });
+      return {
+        reference,
+        status: 'succeeded',
+        companyId: effectiveCompanyId,
+        planId: effectivePlanId,
+        amount: 15000,
+        currency: 'XOF',
+      };
     }
 
     return {

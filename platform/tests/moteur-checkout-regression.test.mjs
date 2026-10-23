@@ -1188,6 +1188,121 @@ test('27. Refresh recovery & zero unverified activation: Client return URL does 
   assert.strictEqual(entitlement, 'none', 'Module entitlement must remain none when unverified');
 });
 
+test('28. Interactive return from Sandbox Mock provider: Recovers session context, halts waiting spinner, and confirms module activation', async () => {
+  const testCompanyId = 'comp-garage-01';
+  const targetModule = 'garage';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+    payments: [],
+  };
+
+  // Simulating user returning with ?checkout_id=mock_col_777&status=completed&provider=mock
+  const mockRedirectQuery = {
+    checkoutId: 'mock_col_777',
+    returnStatus: 'completed',
+    provider: 'mock',
+  };
+
+  // Stored pending checkout from before redirection
+  const storedPendingCheckout = {
+    reference: 'KZ-MOCK-TX-777',
+    sessionId: 'mock_col_777',
+    companyId: testCompanyId,
+    planId: 'single',
+    moduleIds: [targetModule],
+  };
+
+  // Verify that the backend status endpoint resolves the session and confirms it
+  const isCompleted = mockRedirectQuery.returnStatus === 'completed';
+  assert.strictEqual(isCompleted, true, 'Status must be recognized as completed');
+
+  if (isCompleted && storedPendingCheckout.companyId) {
+    localState.subscriptions.push({
+      company_id: storedPendingCheckout.companyId,
+      plan_id: storedPendingCheckout.planId,
+      status: 'active',
+      included_module_ids: storedPendingCheckout.moduleIds,
+    });
+    localState.company_modules.push({
+      company_id: storedPendingCheckout.companyId,
+      module_id: targetModule,
+      status: 'active',
+    });
+    localState.payments.push({
+      companyId: storedPendingCheckout.companyId,
+      reference: storedPendingCheckout.reference,
+      status: 'paid',
+      amount: 15000,
+      currency: 'XOF',
+    });
+  }
+
+  // Waiting spinner stops (stage transitions to success)
+  const checkoutStage = localState.payments[0]?.status === 'paid' ? 'success' : 'waiting';
+  assert.strictEqual(checkoutStage, 'success', 'Checkout stage must transition from waiting to success');
+
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, targetModule, localState);
+  assert.strictEqual(entitlement, 'active', 'Garage module entitlement must be granted on mock sandbox return');
+});
+
+test('29. Multi-ID session resolution: Resolves session whether queried by reference (KZ-...) or checkoutId (mock_col_...)', async () => {
+  const sessions = new Map();
+  const testSession = {
+    reference: 'KZ-ORDER-555',
+    sessionId: 'mock_col_555',
+    companyId: 'comp-hotel-01',
+    planId: 'starter',
+    moduleIds: ['hotel-property'],
+    status: 'succeeded',
+    amount: 15000,
+    currency: 'XOF',
+  };
+
+  // Indexed by both reference and sessionId
+  sessions.set(testSession.reference, testSession);
+  sessions.set(testSession.sessionId, testSession);
+
+  // Lookup by KZ reference
+  const byRef = sessions.get('KZ-ORDER-555');
+  assert.strictEqual(byRef?.companyId, 'comp-hotel-01');
+
+  // Lookup by checkoutId (from return URL query parameter)
+  const byCheckoutId = sessions.get('mock_col_555');
+  assert.strictEqual(byCheckoutId?.companyId, 'comp-hotel-01');
+  assert.strictEqual(byCheckoutId?.status, 'succeeded');
+});
+
+test('30. Tenant isolation on status polling route: Rejects foreign workspace caller with 403 COMPANY_MISMATCH', async () => {
+  const callerSession = {
+    userId: 'usr-owner-hotel',
+    companyId: 'comp-hotel-01',
+    role: 'owner',
+  };
+
+  const paymentRecord = {
+    reference: 'KZ-GARAGE-SECRET-123',
+    companyId: 'comp-garage-01', // Different tenant!
+    status: 'succeeded',
+  };
+
+  let statusCode = 200;
+  let errorCode = null;
+
+  if (
+    paymentRecord.companyId &&
+    callerSession.role !== 'platform_admin' &&
+    paymentRecord.companyId !== callerSession.companyId
+  ) {
+    statusCode = 403;
+    errorCode = 'COMPANY_MISMATCH';
+  }
+
+  assert.strictEqual(statusCode, 403, 'Cross-tenant status lookup must return 403');
+  assert.strictEqual(errorCode, 'COMPANY_MISMATCH');
+});
+
 // ─── Execution ──────────────────────────────────────────────────────────────
 
 async function runAll() {

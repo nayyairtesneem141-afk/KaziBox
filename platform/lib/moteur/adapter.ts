@@ -305,7 +305,7 @@ export class MoteurAdapter {
         }
       );
 
-      // Fallback: If direct identifier path returns 404, check confirm endpoint
+      // Fallback: If direct identifier path returns 404, check confirm endpoint or POST action
       if (response.status === 404) {
         const altEndpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/confirm?reference=${identifier}`;
         const altResponse = await this.executeHttpRequest(altEndpoint, {
@@ -314,6 +314,23 @@ export class MoteurAdapter {
         });
         if (altResponse.ok) {
           response = altResponse;
+        } else {
+          // Attempt POST to engine-api-gateway with action: 'payments.status'
+          const gatewayEndpoint = this.config.baseUrl;
+          const postResponse = await this.executeHttpRequest(gatewayEndpoint, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'payments.status',
+              reference: query.reference,
+              idempotency_key: query.reference,
+              session_id: query.sessionId,
+              checkout_id: query.sessionId || query.reference,
+            }),
+          });
+          if (postResponse.ok) {
+            response = postResponse;
+          }
         }
       }
 

@@ -20,15 +20,30 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const reference = searchParams.get('reference');
+  const checkoutId = searchParams.get('checkoutId') || searchParams.get('checkout_id') || searchParams.get('sessionId') || searchParams.get('session_id') || undefined;
+  const planId = searchParams.get('planId') || undefined;
+  const moduleIdsParam = searchParams.get('moduleIds') || searchParams.get('module_ids') || undefined;
+  const moduleIds = moduleIdsParam ? moduleIdsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const returnStatus = searchParams.get('returnStatus') || searchParams.get('status') || undefined;
+  const provider = searchParams.get('provider') || undefined;
 
-  if (!reference) {
+  const targetRef = reference || checkoutId;
+
+  if (!targetRef) {
     return NextResponse.json(
-      { success: false, error: 'Query parameter "reference" is required' },
+      { success: false, error: 'Query parameter "reference" or "checkoutId" is required' },
       { status: 422 }
     );
   }
 
-  const statusResult = await moteurService.getPaymentSessionStatus(reference);
+  const statusResult = await moteurService.getPaymentSessionStatus(targetRef, {
+    companyId: session.companyId,
+    sessionId: checkoutId,
+    planId,
+    moduleIds,
+    returnStatus,
+    provider,
+  });
 
   // Tenant isolation: caller cannot inspect sessions of other workspaces (unless platform_admin)
   if (
