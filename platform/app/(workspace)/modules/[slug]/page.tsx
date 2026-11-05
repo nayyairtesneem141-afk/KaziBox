@@ -19,6 +19,7 @@ export default function ModuleShellPage() {
 
   const [moduleData, setModuleData] = useState<ModuleManifest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [launching, setLaunching] = useState(false);
 
   const role = user?.role || 'worker';
   const isOwner = role === 'owner' || role === 'platform_admin';
@@ -27,15 +28,35 @@ export default function ModuleShellPage() {
     async function load() {
       if (!slug) return;
       const mod = await getModule(slug);
-      if (mod?.entryUrl && mod.entryUrl !== `/modules/${mod.slug}` && !mod.entryUrl.startsWith(`/modules/${mod.slug}`)) {
-        router.replace(mod.entryUrl);
-        return;
-      }
       setModuleData(mod);
       setLoading(false);
     }
     load();
-  }, [slug, router]);
+  }, [slug]);
+
+  const handleLaunchExternal = async () => {
+    if (!moduleData) return;
+    setLaunching(true);
+    try {
+      const res = await fetch(`/api/v1/modules/${moduleData.slug || moduleData.id}/launch`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (data.success && data.launchUrl) {
+        if (data.launchUrl.startsWith('http://') || data.launchUrl.startsWith('https://')) {
+          window.open(data.launchUrl, '_blank', 'noopener,noreferrer');
+        } else {
+          router.push(data.launchUrl);
+        }
+      } else {
+        alert(data.error || 'Erreur lors du lancement');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Erreur réseau');
+    } finally {
+      setLaunching(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -63,6 +84,7 @@ export default function ModuleShellPage() {
   const moduleName = localize(moduleData.name, language) || moduleData.id;
   const moduleTagline = localize(moduleData.tagline, language);
   const features = localizeArray(moduleData.features, language);
+  const isExternalSaaS = moduleData.kind === 'external' || (Boolean(moduleData.entryUrl) && moduleData.entryUrl.startsWith('http'));
 
   return (
     <RequireAccess moduleId={moduleData.id}>
@@ -87,6 +109,11 @@ export default function ModuleShellPage() {
                     className="inline-block w-2.5 h-2.5 rounded-full"
                     style={{ backgroundColor: moduleData.accentColor }}
                   />
+                  {isExternalSaaS && (
+                    <Badge variant="green" size="sm">
+                      SaaS Connecté
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-[#6B7280] mt-0.5">{moduleTagline}</p>
               </div>
@@ -94,6 +121,16 @@ export default function ModuleShellPage() {
 
             {/* Centralized Billing Redirect Shortcuts (rule: modules never contain billing logic) */}
             <div className="flex items-center flex-wrap gap-2">
+              {isExternalSaaS && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleLaunchExternal}
+                  disabled={launching}
+                >
+                  {launching ? 'Connexion SSO...' : '🚀 Ouvrir l’application'}
+                </Button>
+              )}
               {isOwner && (
                 <>
                   <Link href="/billing">
@@ -126,7 +163,13 @@ export default function ModuleShellPage() {
               return (
                 <button
                   key={idx}
-                  onClick={() => alert(`${label} : ${t('placeholders.coming_next')}`)}
+                  onClick={() => {
+                    if (isExternalSaaS) {
+                      handleLaunchExternal();
+                    } else {
+                      alert(`${label} : ${t('placeholders.coming_next')}`);
+                    }
+                  }}
                   className="px-3 py-1.5 rounded-xl text-xs font-bold bg-[#F9FAFB] hover:bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB] transition-colors whitespace-nowrap min-h-[36px]"
                 >
                   {label}
@@ -136,25 +179,27 @@ export default function ModuleShellPage() {
           </div>
         </div>
 
-        {/* Placeholder Content Area: "Module coming next" */}
+        {/* Content Area */}
         <Card padding="lg" className="text-center py-12">
           <div
             className="w-20 h-20 rounded-3xl mx-auto mb-4 flex items-center justify-center text-4xl shadow-inner"
             style={{ backgroundColor: `${moduleData.accentColor}18`, color: moduleData.accentColor }}
           >
-            🚀
+            {moduleData.logo || '🚀'}
           </div>
 
-          <Badge variant="yellow" size="md" className="mb-3">
-            {t('placeholders.coming_next')}
+          <Badge variant={isExternalSaaS ? 'green' : 'yellow'} size="md" className="mb-3">
+            {isExternalSaaS ? 'Application SaaS Opérationnelle' : t('placeholders.coming_next')}
           </Badge>
 
           <h2 className="text-2xl font-black text-[#1F2937] mb-2">
-            {moduleName} &bull; {t('placeholders.module_ready_soon')}
+            {moduleName} &bull; {isExternalSaaS ? 'Intégration KaziBox Active' : t('placeholders.module_ready_soon')}
           </h2>
 
           <p className="text-sm text-[#6B7280] max-w-xl mx-auto mb-8 leading-relaxed">
-            {t('placeholders.module_shell_notice')}
+            {isExternalSaaS
+              ? 'Ce module vertical est connecté à votre espace KaziBox avec authentification SSO sécurisée, synchronisation du grand livre et isolation stricte des données de votre entreprise.'
+              : t('placeholders.module_shell_notice')}
           </p>
 
           {/* Feature Highlights Grid */}
@@ -173,13 +218,23 @@ export default function ModuleShellPage() {
           </div>
 
           <div className="flex items-center justify-center gap-3">
+            {isExternalSaaS && (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleLaunchExternal}
+                disabled={launching}
+              >
+                {launching ? 'Authentification...' : '🚀 Lancer l’Application Directement'}
+              </Button>
+            )}
             <Link href="/modules/my-modules">
               <Button variant="outline" size="md">
                 &larr; {t('nav.my_modules')}
               </Button>
             </Link>
             <Link href="/dashboard">
-              <Button variant="primary" size="md">
+              <Button variant="outline" size="md">
                 {t('placeholders.back_dashboard')}
               </Button>
             </Link>

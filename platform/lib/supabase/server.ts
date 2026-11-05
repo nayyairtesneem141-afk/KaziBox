@@ -4,7 +4,9 @@ import { Database } from './types';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, isSupabaseConfigured } from './config';
 
 export function createServerClient(req?: any): SupabaseClient<any> | null {
-  if (!isSupabaseConfigured() || typeof window !== 'undefined') {
+  const url = (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SUPABASE_URL) || SUPABASE_URL;
+  const anonKey = (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY) || SUPABASE_ANON_KEY;
+  if (!isSupabaseConfigured() || typeof window !== 'undefined' || !url || !anonKey) {
     return null;
   }
 

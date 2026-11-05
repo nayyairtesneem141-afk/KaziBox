@@ -3,6 +3,8 @@ import { getStore, setStoreItem } from './storage';
 import { getSubscription } from './billing';
 import { notifyModuleActivated, notifyModuleDeactivated } from './notifications';
 import { dispatchWebhookEvent } from './webhooks';
+import { fromDbModuleStatus, sanitizeManifest, assertSafeOutboundUrl } from './registry';
+import { getModuleAliases } from './moteur/modules';
 import { createBrowserClient } from './supabase/client';
 import { createServerClient } from './supabase/server';
 import { createAdminClient } from './supabase/admin';
@@ -16,7 +18,10 @@ export async function getModules(): Promise<ModuleManifest[]> {
   const baseModules = store.modules;
 
   if (isSupabaseConfigured()) {
-    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    const supabase: any =
+      typeof window !== 'undefined'
+        ? createBrowserClient()
+        : createAdminClient() || createServerClient();
     if (supabase) {
       const { data } = await supabase.from('modules').select('*');
       if (data && data.length > 0) {
@@ -26,68 +31,113 @@ export async function getModules(): Promise<ModuleManifest[]> {
           if (m.slug) dbMap.set(m.slug, m);
         });
 
+        const CANONICAL_ALIAS_MAP: Record<string, string> = {
+          'garage-auto': 'garage',
+          'garage': 'garage',
+          'hair-salon': 'salon',
+          'salon': 'salon',
+          'salon-beauty': 'salon',
+          'hotel': 'hotel-property',
+          'hotel-property': 'hotel-property',
+          'demo-module': 'demo',
+          'demo': 'demo',
+          'pharmastock': 'pharmastock',
+          'pharmacy': 'pharmacy',
+        };
+
         const merged: ModuleManifest[] = [];
         const processedIds = new Set<string>();
 
         // 1. Process base modules (merge DB overrides if present)
         for (const baseMod of baseModules) {
-          const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null);
+          const canonicalTarget = CANONICAL_ALIAS_MAP[baseMod.id] || (baseMod.slug ? CANONICAL_ALIAS_MAP[baseMod.slug] : null);
+          const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null) || (canonicalTarget ? dbMap.get(canonicalTarget) : null);
           if (dbRow) {
             const rawManifest = (typeof dbRow.manifest === 'object' && dbRow.manifest !== null) ? dbRow.manifest : {};
-            merged.push({
-              ...baseMod,
-              ...rawManifest,
-              id: dbRow.id || baseMod.id,
-              slug: dbRow.slug || baseMod.slug,
-              name: dbRow.name || baseMod.name,
-              description: dbRow.description || baseMod.description,
-              tagline: dbRow.tagline || baseMod.tagline,
-              category: dbRow.category || baseMod.category,
-              pricing_type: baseMod.pricing_type || rawManifest.pricing_type || (dbRow.pricing?.type === 'free' ? 'free' : 'paid'),
-              keywords: baseMod.keywords || rawManifest.keywords || [],
-              status: dbRow.status === 'active' ? 'published' : (dbRow.status || baseMod.status),
-            });
+            merged.push(
+              sanitizeManifest({
+                ...baseMod,
+                ...rawManifest,
+                id: dbRow.id || baseMod.id,
+                slug: dbRow.slug || rawManifest.slug || baseMod.slug,
+                name: dbRow.name || rawManifest.name || baseMod.name,
+                description: dbRow.description || rawManifest.description || baseMod.description,
+                tagline: dbRow.tagline || rawManifest.tagline || baseMod.tagline,
+                category: dbRow.category || rawManifest.category || baseMod.category,
+                logo: rawManifest.logo || dbRow.icon || baseMod.logo,
+                developer: dbRow.developer || rawManifest.developer || baseMod.developer,
+                version: dbRow.version || rawManifest.version || baseMod.version,
+                pricing_type:
+                  rawManifest.pricing_type ||
+                  (dbRow.pricing?.type === 'free' ? 'free' : dbRow.pricing?.type === 'paid' ? 'paid' : baseMod.pricing_type || 'paid'),
+                pricePerMonth:
+                  rawManifest.pricePerMonth ||
+                  (dbRow.pricing?.amount !== undefined
+                    ? { amount: Number(dbRow.pricing.amount), currency: dbRow.pricing.currency || 'XOF' }
+                    : baseMod.pricePerMonth),
+                keywords: rawManifest.keywords || baseMod.keywords || [],
+                status: fromDbModuleStatus(dbRow.status, rawManifest.status || baseMod.status),
+              })
+            );
           } else {
-            merged.push(baseMod);
+            merged.push(sanitizeManifest(baseMod));
           }
           processedIds.add(baseMod.id);
+          if (baseMod.slug) processedIds.add(baseMod.slug);
+          if (canonicalTarget) processedIds.add(canonicalTarget);
+          if (dbRow) {
+            if (dbRow.id) processedIds.add(dbRow.id);
+            if (dbRow.slug) processedIds.add(dbRow.slug);
+          }
         }
 
         // 2. Add any third-party / external modules registered in Supabase
         data.forEach((m: any) => {
-          if (!processedIds.has(m.id)) {
+          const mCanonical = CANONICAL_ALIAS_MAP[m.id] || (m.slug ? CANONICAL_ALIAS_MAP[m.slug] : null);
+          if (
+            !processedIds.has(m.id) &&
+            (!m.slug || !processedIds.has(m.slug)) &&
+            (!mCanonical || !processedIds.has(mCanonical))
+          ) {
             const rawManifest = (typeof m.manifest === 'object' && m.manifest !== null) ? m.manifest : {};
-            merged.push({
-              id: m.id,
-              slug: m.slug || m.id,
-              name: m.name as any,
-              description: m.description as any,
-              tagline: m.tagline as any,
-              category: m.category || rawManifest.category || 'services',
-              pricing_type: rawManifest.pricing_type || (m.pricing?.type === 'free' ? 'free' : 'paid'),
-              keywords: rawManifest.keywords || [],
-              icon: m.icon,
-              kind: m.kind as any || 'external',
-              status: m.status === 'active' ? 'published' : (m.status as any),
-              developer: m.developer || 'Third-Party Developer',
-              version: m.version || '1.0.0',
-              minPlatformVersion: m.min_platform_version,
-              features: m.features as any,
-              pricing: m.pricing as any,
-              entryUrl: rawManifest.entryUrl || `/modules/${m.slug || m.id}`,
-              menuItems: rawManifest.menuItems || [],
-              scopes: rawManifest.scopes || [],
-              languages: rawManifest.languages || ['fr', 'en'],
-              summaryUrl: rawManifest.summaryUrl || '',
-              webhookUrl: rawManifest.webhookUrl || '',
-              pwa: rawManifest.pwa || {
-                scope: `/modules/${m.slug || m.id}`,
-                startUrl: `/modules/${m.slug || m.id}`,
-                themeColor: '#6D28D9',
-                icons: [],
-              },
-              ...rawManifest,
-            } as ModuleManifest);
+            merged.push(
+              sanitizeManifest({
+                ...rawManifest,
+                id: m.id,
+                slug: m.slug || rawManifest.slug || m.id,
+                name: (m.name || rawManifest.name || m.id) as any,
+                description: (m.description || rawManifest.description || '') as any,
+                tagline: (m.tagline || rawManifest.tagline || '') as any,
+                category: m.category || rawManifest.category || 'services',
+                pricing_type: rawManifest.pricing_type || (m.pricing?.type === 'free' ? 'free' : 'paid'),
+                pricePerMonth:
+                  rawManifest.pricePerMonth ||
+                  (m.pricing?.amount !== undefined
+                    ? { amount: Number(m.pricing.amount), currency: m.pricing.currency || 'XOF' }
+                    : { amount: 15000, currency: 'XOF' }),
+                keywords: rawManifest.keywords || [],
+                logo: rawManifest.logo || m.icon || '🚀',
+                accentColor: rawManifest.accentColor || '#6D28D9',
+                kind: (m.kind as any) || rawManifest.kind || 'external',
+                status: fromDbModuleStatus(m.status, rawManifest.status),
+                developer: m.developer || rawManifest.developer || 'Third-Party Developer',
+                version: m.version || rawManifest.version || '1.0.0',
+                features: (m.features || rawManifest.features) as any,
+                entryUrl: rawManifest.entryUrl || `/modules/${m.slug || m.id}`,
+                menuItems: rawManifest.menuItems || [],
+                scopes: rawManifest.scopes || ['read:context', 'write:finance', 'write:events'],
+                events: rawManifest.events || ['module.activated', 'module.deactivated'],
+                languages: rawManifest.languages || ['fr', 'en'],
+                summaryUrl: rawManifest.summaryUrl || '',
+                webhookUrl: rawManifest.webhookUrl || '',
+                pwa: rawManifest.pwa || {
+                  scope: `/modules/${m.slug || m.id}`,
+                  startUrl: `/modules/${m.slug || m.id}`,
+                  themeColor: rawManifest.accentColor || '#6D28D9',
+                  icons: [],
+                },
+              } as ModuleManifest)
+            );
             processedIds.add(m.id);
           }
         });
@@ -97,52 +147,76 @@ export async function getModules(): Promise<ModuleManifest[]> {
     }
   }
 
-  return baseModules;
+  return baseModules.map((m) => sanitizeManifest(m));
 }
 
 /**
  * Fetch single module by slug or id
  */
 export async function getModule(slugOrId: string): Promise<ModuleManifest | null> {
+  if (!slugOrId) return null;
+  const clean = slugOrId.trim().toLowerCase();
   const store = getStore();
-  const baseFound = store.modules.find((m) => m.id === slugOrId || m.slug === slugOrId);
+  const baseFound = store.modules.find((m) => m.id === clean || m.slug === clean);
 
   if (isSupabaseConfigured()) {
-    const supabase: any = typeof window !== 'undefined' ? createBrowserClient() : createServerClient();
+    const supabase: any =
+      typeof window !== 'undefined'
+        ? createBrowserClient()
+        : createAdminClient() || createServerClient();
     if (supabase) {
       const { data } = await supabase
         .from('modules')
         .select('*')
-        .or(`id.eq.${slugOrId},slug.eq.${slugOrId}`)
+        .or(`id.eq.${clean},slug.eq.${clean}`)
         .maybeSingle();
 
       if (data) {
         const rawManifest = (typeof data.manifest === 'object' && data.manifest !== null) ? data.manifest : {};
-        return {
+        return sanitizeManifest({
           ...(baseFound || {}),
           ...rawManifest,
           id: data.id,
-          slug: data.slug,
-          name: data.name as any,
-          description: data.description as any,
-          tagline: data.tagline as any,
-          category: data.category || (baseFound ? baseFound.category : 'services'),
-          pricing_type: baseFound?.pricing_type || rawManifest.pricing_type || (data.pricing?.type === 'free' ? 'free' : 'paid'),
-          keywords: baseFound?.keywords || rawManifest.keywords || [],
-          icon: data.icon || baseFound?.logo,
-          kind: data.kind as any,
-          status: data.status === 'active' ? 'published' : (data.status as any),
-          developer: data.developer,
-          version: data.version,
-          minPlatformVersion: data.min_platform_version,
-          features: data.features as any,
-          pricing: data.pricing as any,
-        } as ModuleManifest;
+          slug: data.slug || rawManifest.slug || data.id,
+          name: (data.name || rawManifest.name || baseFound?.name) as any,
+          description: (data.description || rawManifest.description || baseFound?.description) as any,
+          tagline: (data.tagline || rawManifest.tagline || baseFound?.tagline) as any,
+          category: data.category || rawManifest.category || (baseFound ? baseFound.category : 'services'),
+          pricing_type:
+            rawManifest.pricing_type ||
+            (data.pricing?.type === 'free' ? 'free' : data.pricing?.type === 'paid' ? 'paid' : baseFound?.pricing_type || 'paid'),
+          pricePerMonth:
+            rawManifest.pricePerMonth ||
+            (data.pricing?.amount !== undefined
+              ? { amount: Number(data.pricing.amount), currency: data.pricing.currency || 'XOF' }
+              : baseFound?.pricePerMonth),
+          keywords: rawManifest.keywords || baseFound?.keywords || [],
+          logo: rawManifest.logo || data.icon || baseFound?.logo || '🚀',
+          accentColor: rawManifest.accentColor || baseFound?.accentColor || '#6D28D9',
+          kind: (data.kind as any) || rawManifest.kind || baseFound?.kind || 'external',
+          status: fromDbModuleStatus(data.status, rawManifest.status || baseFound?.status),
+          developer: data.developer || rawManifest.developer || baseFound?.developer,
+          version: data.version || rawManifest.version || baseFound?.version || '1.0.0',
+          features: (data.features || rawManifest.features || baseFound?.features) as any,
+          entryUrl: rawManifest.entryUrl || baseFound?.entryUrl || `/modules/${data.slug || data.id}`,
+          menuItems: rawManifest.menuItems || baseFound?.menuItems || [],
+          scopes: rawManifest.scopes || baseFound?.scopes || ['read:context', 'write:finance', 'write:events'],
+          events: rawManifest.events || baseFound?.events || ['module.activated', 'module.deactivated'],
+          languages: rawManifest.languages || baseFound?.languages || ['fr', 'en'],
+          summaryUrl: rawManifest.summaryUrl ?? baseFound?.summaryUrl ?? '',
+          webhookUrl: rawManifest.webhookUrl ?? baseFound?.webhookUrl ?? '',
+          pwa: rawManifest.pwa || baseFound?.pwa || {
+            scope: `/modules/${data.slug || data.id}`,
+            startUrl: `/modules/${data.slug || data.id}`,
+            themeColor: '#6D28D9',
+            icons: [],
+          },
+        } as ModuleManifest);
       }
     }
   }
 
-  return baseFound || null;
+  return baseFound ? sanitizeManifest(baseFound) : null;
 }
 
 export type ModuleEntitlement = 'active' | 'read_only' | 'none';
@@ -168,13 +242,14 @@ export async function getModuleEntitlement(
   const isHotel = ['hotel', 'hotel-property'].includes(moduleId);
   const isDemo = ['demo', 'demo-module'].includes(moduleId);
 
-  const targetIds = isSalon
-    ? ['hair-salon', 'salon', 'salon-beauty']
-    : isGarage
-    ? ['garage', 'garage-auto']
-    : isHotel
-    ? ['hotel', 'hotel-property']
-    : [moduleId, mod?.slug || moduleId];
+  const targetIds = Array.from(
+    new Set([
+      ...getModuleAliases(moduleId),
+      moduleId,
+      ...(mod?.id ? [mod.id] : []),
+      ...(mod?.slug ? [mod.slug] : []),
+    ])
+  );
 
   // 1. Supabase check
   if (isSupabaseConfigured()) {
@@ -184,13 +259,7 @@ export async function getModuleEntitlement(
         : (createAdminClient() || createServerClient());
 
     if (supabase) {
-      const filterStr = isSalon
-        ? 'module_id.eq.hair-salon,module_id.eq.salon,module_id.eq.salon-beauty'
-        : isGarage
-        ? 'module_id.eq.garage,module_id.eq.garage-auto'
-        : isHotel
-        ? 'module_id.eq.hotel,module_id.eq.hotel-property'
-        : `module_id.eq.${moduleId},module_id.eq.${mod?.slug || moduleId}`;
+      const filterStr = targetIds.map((tId) => `module_id.eq.${tId}`).join(',');
 
       // Check company_modules table
       const { data: compMods } = await supabase
@@ -352,13 +421,14 @@ export async function isModuleCoveredBySubscription(
     return true;
   }
 
-  const isSalon = ['hair-salon', 'salon', 'salon-beauty'].includes(moduleId);
-  const isGarage = ['garage', 'garage-auto'].includes(moduleId);
-  const targetIds = isSalon
-    ? ['hair-salon', 'salon', 'salon-beauty']
-    : isGarage
-    ? ['garage', 'garage-auto']
-    : [moduleId, mod?.slug || moduleId];
+  const targetIds = Array.from(
+    new Set([
+      ...getModuleAliases(moduleId),
+      moduleId,
+      ...(mod?.id ? [mod.id] : []),
+      ...(mod?.slug ? [mod.slug] : []),
+    ])
+  );
 
   if (isSupabaseConfigured()) {
     const supabase: any =
@@ -764,6 +834,50 @@ export async function getModuleSummaries(companyId: string): Promise<any[]> {
       metrics = [
         { id: 'm5', moduleId: modId, label: { fr: 'Appels API Démo', en: 'Demo API Calls' }, value: 2 },
       ];
+    } else if (mod.summaryUrl && (mod.summaryUrl.startsWith('http://') || mod.summaryUrl.startsWith('https://'))) {
+      try {
+        const safety = await assertSafeOutboundUrl(mod.summaryUrl);
+        if (!safety.safe) {
+          throw new Error(safety.reason);
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const res = await fetch(mod.summaryUrl, {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Workspace-Id': companyId,
+            Accept: 'application/json',
+            ...(typeof process !== 'undefined' && process.env?.KAZIBOX_API_KEY
+              ? { Authorization: `Bearer ${process.env.KAZIBOX_API_KEY}` }
+              : {}),
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.status >= 300 && res.status < 400) {
+          throw new Error(`Blocked unsafe HTTP redirect (${res.status}) from summaryUrl`);
+        }
+        if (res.ok) {
+          const remote = await res.json();
+          rev = typeof remote.revenue === 'number' ? remote.revenue : 0;
+          exp = typeof remote.expenses === 'number' ? remote.expenses : 0;
+          activity = typeof remote.activityCount === 'number' ? remote.activityCount : 0;
+          metrics = Array.isArray(remote.metrics) ? remote.metrics : [];
+        }
+      } catch {
+        // Fallback to zero if external SaaS summary endpoint is unreachable
+      }
+    } else if (modId === 'pharmastock' || modId === 'pharmacy') {
+      try {
+        const { buildPharmaStockSummary } = await import('../../modules/pharmastock/src/index');
+        const pSummary = await buildPharmaStockSummary(companyId);
+        rev = pSummary.revenue;
+        exp = pSummary.expenses;
+        activity = pSummary.activityCount;
+        metrics = pSummary.metrics || [];
+      } catch {}
     }
 
     summaries.push({

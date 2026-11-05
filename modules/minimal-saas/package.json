@@ -1,0 +1,15 @@
+{
+  "name": "@kazibox/minimal-saas",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Minimal reference SaaS integration for KaziBox ecosystem using @kazibox/sdk",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@kazibox/sdk": "*"
+  }
+}

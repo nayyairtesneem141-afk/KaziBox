@@ -1,0 +1,41 @@
+name: kazibox-pharmastock
+region: fra
+services:
+  - name: pharmastock-app
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    dockerfile_path: modules/pharmastock/Dockerfile
+    http_port: 3000
+    routes:
+      - path: /
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: PHARMA_DATA_DIR
+        value: /data
+        scope: RUN_TIME
+      - key: KAZIBOX_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAZIBOX_API_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAZIBOX_SSO_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAZIBOX_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+    volumes:
+      - name: pharmastock-data
+        mount_path: /data
+        size: 1Gi

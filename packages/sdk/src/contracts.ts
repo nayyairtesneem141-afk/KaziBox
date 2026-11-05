@@ -1,4 +1,4 @@
-import { UserRole } from './types';
+import { UserRole } from './types.js';
 
 export interface ModulePwaConfig {
   scope: string;
@@ -28,8 +28,10 @@ export interface ModuleManifest {
   logo: string;
   accentColor: string;
   entryUrl: string;
+  appUrl?: string;
   menuItems: ModuleMenuItem[];
   scopes: string[];
+  events?: string[];
   languages: string[];
   summaryUrl: string;
   webhookUrl: string;

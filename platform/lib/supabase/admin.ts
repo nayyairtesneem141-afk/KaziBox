@@ -5,6 +5,9 @@ import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from './config';
 let adminClient: SupabaseClient<Database> | null = null;
 
 export function createAdminClient(): SupabaseClient<Database> | null {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).__kaziboxSupabaseAdminOverride) {
+    return (globalThis as any).__kaziboxSupabaseAdminOverride;
+  }
   if (typeof window !== 'undefined') {
     return null;
   }
@@ -23,4 +26,3 @@ export function createAdminClient(): SupabaseClient<Database> | null {
   }
   return adminClient;
 }
-

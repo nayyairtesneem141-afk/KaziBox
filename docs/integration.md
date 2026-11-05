@@ -55,12 +55,20 @@ Every module declares its metadata in a declarative JSON manifest adhering to `@
 
 ---
 
-## 3. Registering Your Module & Generating API Keys
+## 3. Registering Your Module & Provisioning Credentials (No-Code UI & API)
 
-1. Navigate to the **Platform Admin Registry** (`/admin/registry`).
-2. Add your module manifest JSON.
-3. Validate the **6-point PWA Checklist** (Manifest, Icons, Service Worker, HTTPS, Touch Targets, Bilingual Support).
-4. Generate an API Key. Copy the plaintext secret (`kz_live_..._sec_...`). It is shown strictly **once**.
+1. Navigate to the **Platform Admin Registry** (`/admin/registry`) as a `platform_admin`.
+2. Click **`+ Enregistrer un nouveau SaaS`** and fill in the structured no-code registration form:
+   - Module Name (FR/EN), Unique Slug (`id`), Descriptions (FR/EN), Category, Developer Name, Version, Icon, and Accent Color.
+   - Application Base URL (`appUrl`), SSO Entry URL (`entryUrl`), Webhook Endpoint (`webhookUrl`), and Summary Endpoint (`summaryUrl`).
+   - Pricing configuration (`paid` / `free`, monthly amount, currency), SDK scopes, subscribed webhook events, and PWA configuration.
+3. Click **`Enregistrer & Générer les Identifiants`**:
+   - KaziBox validates all fields, enforces unique slugs (`409 DUPLICATE_MODULE_SLUG`), evaluates the **6-point PWA Checklist**, persists the module to `public.modules`, and provisions three cryptographic secrets:
+     - `KAZIBOX_API_KEY` (`kz_live_<slug>_...`) — hashed with SHA-256 (`sha256:<hex>`).
+     - `KAZIBOX_SSO_SECRET` (`kz_sso_<slug>_...`) — encrypted at rest (AES-256-GCM) for signing 5-minute SSO handoff tokens.
+     - `KAZIBOX_WEBHOOK_SECRET` (`kz_whsec_<slug>_...`) — encrypted at rest (AES-256-GCM) for signing outbound HTTP webhooks (`x-kazibox-signature`).
+4. Copy the plaintext secrets from the **One-Time Reveal Modal** (or click **Copier le bloc `.env`**). Secrets are never returned in subsequent GET requests or public manifests.
+5. Open **`/admin/registry/[id]`** at any time to edit the module via the **Formulaire No-Code** (or **JSON Avancé**), publish/suspend the module, rotate any of the 3 secrets, or test live webhook delivery (`📡 Tester le Webhook`).
 
 ---
 

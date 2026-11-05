@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import {
   User,
   Workspace,
@@ -457,7 +459,7 @@ export const INITIAL_MODULES: ModuleManifest[] = [
       { label: { en: 'Medication Inventory', fr: 'Stock Médicaments' }, path: '/modules/pharmacy/inventory' },
       { label: { en: 'Expiry Alerts', fr: 'Alertes Péremption' }, path: '/modules/pharmacy/alerts' },
     ],
-    scopes: ['read:pharmacy', 'write:prescriptions', 'read:medicines'],
+    scopes: ['read:pharmacy', 'write:prescriptions', 'read:medicines', 'read:context', 'write:finance', 'write:events', 'read:subscription'],
     languages: ['fr', 'en'],
     summaryUrl: '/api/modules/pharmacy/summary',
     webhookUrl: 'https://api.kazibox.com/webhooks/pharmacy',
@@ -498,6 +500,86 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     },
     screenshots: [
       'https://images.unsplash.com/photo-1587854692152-cbe660dbde88?auto=format&fit=crop&w=800&q=80',
+    ],
+  },
+  {
+    id: 'pharmastock',
+    slug: 'pharmastock',
+    name: {
+      fr: 'PharmaStock — Pharmacie & Dispensaire',
+      en: 'PharmaStock — Pharmacy & Dispensary',
+    },
+    version: '1.0.0',
+    tagline: {
+      fr: 'Gestion d’officine, stocks de médicaments, alertes péremption et comptoir de vente',
+      en: 'Dispensary management, medication stock, expiry alerts and sales counter',
+    },
+    logo: '💊',
+    accentColor: '#10B981',
+    entryUrl: '/modules/pharmastock',
+    menuItems: [
+      { label: { fr: 'Comptoir de Vente', en: 'Sales Counter' }, path: '/modules/pharmastock/sales' },
+      { label: { fr: 'Stock Médicaments', en: 'Medication Inventory' }, path: '/modules/pharmastock/inventory' },
+      { label: { fr: 'Alertes Péremption', en: 'Expiry Alerts' }, path: '/modules/pharmastock/alerts' },
+      { label: { fr: 'Ordonnances', en: 'Prescriptions' }, path: '/modules/pharmastock/prescriptions' },
+    ],
+    scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription'],
+    languages: ['fr', 'en'],
+    summaryUrl: '/api/v1/pharmastock/summary',
+    webhookUrl: 'https://pharmastock.internal/api/webhooks/kazibox',
+    pwa: {
+      scope: '/modules/pharmastock',
+      startUrl: '/modules/pharmastock',
+      themeColor: '#10B981',
+      icons: [
+        { src: '/icons/pharmastock-192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/icons/pharmastock-512.png', sizes: '512x512', type: 'image/png' },
+        {
+          src: '/icons/pharmastock-512-maskable.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'maskable',
+        },
+      ],
+    },
+    kind: 'external',
+    status: 'published',
+    developer: 'KaziBox Ecosystem & Moteur Health',
+    author: 'PharmaStock Labs',
+    isThirdParty: true,
+    category: 'health',
+    pricing_type: 'paid',
+    pricePerMonth: {
+      amount: 15000,
+      currency: 'XOF',
+    },
+    keywords: [
+      'pharmacie', 'officine', 'medicament', 'sante', 'peremption',
+      'ordonnance', 'dispensaire', 'pharmacy', 'health', 'batch', 'pharmastock',
+    ],
+    description: {
+      fr: 'Solution SaaS de référence pour la gestion d’officine et de dispensaire en Afrique de l’Ouest. Suivi rigoureux des lots de médicaments, alertes intelligentes contre les pertes de péremption, délivrance d’ordonnances et encaissement direct connecté au Grand Livre KaziBox.',
+      en: 'Reference SaaS solution for pharmacy and dispensary management across West Africa. Strict batch tracking, automated expiration alerts, prescription fulfillment, and point-of-sale checkout connected directly to the KaziBox unified ledger.',
+    },
+    features: {
+      fr: [
+        'Contrôle des stocks de médicaments par numéro de lot et DLUO',
+        'Alertes proactives sur les lots à péremption imminente (< 30, 60, 90 jours)',
+        'Comptoir de vente et délivrance rapide d’ordonnances',
+        'Synchronisation financière automatique et idempotente avec KaziBox',
+        'Prise en charge hors-ligne et PWA installable sur tablette et smartphone',
+      ],
+      en: [
+        'Batch-level medication inventory control with shelf-life tracking',
+        'Proactive alerts on imminent expiry batches (< 30, 60, 90 days)',
+        'Fast sales counter and prescription dispensing',
+        'Automated, idempotent financial sync with the KaziBox platform ledger',
+        'Offline-capable PWA installable on tablet and smartphone',
+      ],
+    },
+    screenshots: [
+      'https://images.unsplash.com/photo-1587854692152-cbe660dbde88?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=800&q=80',
     ],
   },
   {
@@ -1047,11 +1129,17 @@ export const INITIAL_PAYMENTS: PaymentHistoryItem[] = [
   },
 ];
 
+export type ModuleCredentialType = 'api_key' | 'sso_secret' | 'webhook_secret';
+
 export interface StoredApiKey {
   id: string;
   moduleId: string;
+  companyId?: string;
+  type?: ModuleCredentialType;
+  scope?: 'platform' | 'workspace';
   prefix: string;
   hashedSecret: string;
+  encryptedSecret?: string;
   createdAt: string;
 }
 
@@ -1088,23 +1176,145 @@ const globalForStorage = globalThis as unknown as {
     apiKeys: any[];
     directoryEntries: any[];
   };
+  kaziboxServerStorePath?: string;
 };
 
+function getServerStoreFilePath(): string | null {
+  if (typeof window !== 'undefined') return null;
+  if (typeof process !== 'undefined' && process.env?.KAZIBOX_DISABLE_DISK_STORE === '1') {
+    return null;
+  }
+  try {
+    if (typeof process !== 'undefined' && process.env?.KAZIBOX_STORE_PATH) {
+      return path.resolve(process.env.KAZIBOX_STORE_PATH);
+    }
+    if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
+      return path.resolve(process.cwd(), '.cache', 'kazibox-platform-store.json');
+    }
+  } catch {}
+  return null;
+}
+
+function hydrateServerStoreFromDisk(baseStore: NonNullable<typeof globalForStorage.kaziboxServerStore>) {
+  const filePath = getServerStoreFilePath();
+  if (!filePath || !fs || typeof fs.existsSync !== 'function') return baseStore;
+
+  try {
+    if (!fs.existsSync(filePath)) return baseStore;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw.trim()) return baseStore;
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed.modules)) {
+      const modMap = new Map<string, any>();
+      for (const m of baseStore.modules) {
+        modMap.set(m.id, JSON.parse(JSON.stringify(m)));
+      }
+      for (const m of parsed.modules) {
+        if (m && m.id) {
+          modMap.set(m.id, m);
+        }
+      }
+      baseStore.modules = Array.from(modMap.values());
+    }
+
+    if (Array.isArray(parsed.apiKeys)) {
+      baseStore.apiKeys = parsed.apiKeys;
+    }
+
+    if (Array.isArray(parsed.subscriptions)) {
+      const subMap = new Map<string, any>();
+      for (const s of baseStore.subscriptions) {
+        subMap.set(s.id || s.companyId, s);
+      }
+      for (const s of parsed.subscriptions) {
+        if (s && (s.id || s.companyId)) {
+          subMap.set(s.id || s.companyId, s);
+        }
+      }
+      baseStore.subscriptions = Array.from(subMap.values());
+    }
+
+    if (Array.isArray(parsed.workspaces)) {
+      const wsMap = new Map<string, any>();
+      for (const w of baseStore.workspaces) {
+        wsMap.set(w.id, w);
+      }
+      for (const w of parsed.workspaces) {
+        if (w && w.id) {
+          wsMap.set(w.id, w);
+        }
+      }
+      baseStore.workspaces = Array.from(wsMap.values());
+    }
+
+    if (Array.isArray(parsed.directoryEntries)) {
+      baseStore.directoryEntries = parsed.directoryEntries;
+    }
+  } catch {
+    // Ignore malformed disk cache and fall back to base store
+  }
+
+  return baseStore;
+}
+
+function persistServerStoreToDisk(store: NonNullable<typeof globalForStorage.kaziboxServerStore>) {
+  const filePath = getServerStoreFilePath();
+  if (!filePath || !fs || typeof fs.writeFileSync !== 'function') return;
+
+  try {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const payload = JSON.stringify(
+      {
+        version: STORE_VERSION,
+        updatedAt: new Date().toISOString(),
+        modules: store.modules,
+        apiKeys: store.apiKeys,
+        subscriptions: store.subscriptions,
+        workspaces: store.workspaces,
+        directoryEntries: store.directoryEntries,
+      },
+      null,
+      2
+    );
+    fs.writeFileSync(tmpPath, payload, 'utf8');
+    fs.renameSync(tmpPath, filePath);
+  } catch {
+    // Non-fatal in read-only filesystems
+  }
+}
+
 function getServerStore() {
-  if (!globalForStorage.kaziboxServerStore) {
-    globalForStorage.kaziboxServerStore = {
-      workspaces: [...INITIAL_WORKSPACES],
-      users: [...INITIAL_USERS],
-      members: [...INITIAL_MEMBERS],
-      notifications: [...INITIAL_NOTIFICATIONS],
-      modules: [...INITIAL_MODULES],
-      subscriptions: [...INITIAL_SUBSCRIPTIONS],
-      payments: [...INITIAL_PAYMENTS],
-      apiKeys: [...INITIAL_API_KEYS],
+  const currentPath = getServerStoreFilePath() || 'memory';
+  if (!globalForStorage.kaziboxServerStore || globalForStorage.kaziboxServerStorePath !== currentPath) {
+    const freshStore = {
+      workspaces: JSON.parse(JSON.stringify(INITIAL_WORKSPACES)),
+      users: JSON.parse(JSON.stringify(INITIAL_USERS)),
+      members: JSON.parse(JSON.stringify(INITIAL_MEMBERS)),
+      notifications: JSON.parse(JSON.stringify(INITIAL_NOTIFICATIONS)),
+      modules: JSON.parse(JSON.stringify(INITIAL_MODULES)),
+      subscriptions: JSON.parse(JSON.stringify(INITIAL_SUBSCRIPTIONS)),
+      payments: JSON.parse(JSON.stringify(INITIAL_PAYMENTS)),
+      apiKeys: JSON.parse(JSON.stringify(INITIAL_API_KEYS)),
       directoryEntries: [],
     };
+    globalForStorage.kaziboxServerStore = hydrateServerStoreFromDisk(freshStore);
+    globalForStorage.kaziboxServerStorePath = currentPath;
   }
   return globalForStorage.kaziboxServerStore;
+}
+
+/**
+ * Forces the server store to reload from disk (simulates a process restart).
+ */
+export function reloadServerStore() {
+  globalForStorage.kaziboxServerStore = undefined;
+  globalForStorage.kaziboxServerStorePath = undefined;
+  return getServerStore();
 }
 
 export const getStore = () => {
@@ -1183,6 +1393,7 @@ export const setStoreItem = <T>(key: keyof typeof STORAGE_KEYS, val: T) => {
     const prop = propMap[key];
     if (prop && s) {
       (s as any)[prop] = val;
+      persistServerStoreToDisk(s);
     }
     return;
   }

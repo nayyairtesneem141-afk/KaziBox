@@ -722,6 +722,7 @@ setTimeout(() => {
   console.log(`\n${'─'.repeat(55)}`);
   if (failed === 0) {
     console.log('All security boundary tests PASSED ✅');
+    process.exit(0);
   } else {
     console.error(`${failed} test(s) FAILED ❌`);
     process.exit(1);
