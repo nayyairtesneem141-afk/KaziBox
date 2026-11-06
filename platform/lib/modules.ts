@@ -10,6 +10,26 @@ import { createServerClient } from './supabase/server';
 import { createAdminClient } from './supabase/admin';
 import { isSupabaseConfigured } from './supabase/config';
 
+export const CANONICAL_ALIAS_MAP: Record<string, string> = {
+  'garage-auto': 'garage',
+  'garage': 'garage',
+  'hair-salon': 'salon',
+  'salon': 'salon',
+  'salon-beauty': 'salon',
+  'hotel': 'hotel-property',
+  'hotel-property': 'hotel-property',
+  'demo-module': 'demo',
+  'demo': 'demo',
+  'pharmastock': 'pharmastock',
+  'pharmacy': 'pharmacy',
+};
+
+export function toCanonicalModuleId(moduleId: string): string {
+  if (!moduleId || typeof moduleId !== 'string') return moduleId;
+  const clean = moduleId.trim().toLowerCase();
+  return CANONICAL_ALIAS_MAP[clean] || clean;
+}
+
 /**
  * Fetch all registered modules
  */
@@ -23,34 +43,50 @@ export async function getModules(): Promise<ModuleManifest[]> {
         ? createBrowserClient()
         : createAdminClient() || createServerClient();
     if (supabase) {
-      const { data } = await supabase.from('modules').select('*');
-      if (data && data.length > 0) {
-        const dbMap = new Map<string, any>();
-        data.forEach((m: any) => {
-          dbMap.set(m.id, m);
-          if (m.slug) dbMap.set(m.slug, m);
+      const { data, error } = await supabase.from('modules').select('*');
+      if (error) {
+        console.error('[MODULES_FETCH_ERROR] Database error fetching modules, falling back to base catalogue:', error.message);
+      } else if (data && data.length > 0) {
+        // Sort database rows so canonical records come first regardless of database row order
+        const sortedDbData = [...data].sort((a: any, b: any) => {
+          const aCanonical = toCanonicalModuleId(a.id);
+          const bCanonical = toCanonicalModuleId(b.id);
+          const aIsCanonical = a.id === aCanonical ? 0 : 1;
+          const bIsCanonical = b.id === bCanonical ? 0 : 1;
+          return aIsCanonical - bIsCanonical;
         });
 
-        const CANONICAL_ALIAS_MAP: Record<string, string> = {
-          'garage-auto': 'garage',
-          'garage': 'garage',
-          'hair-salon': 'salon',
-          'salon': 'salon',
-          'salon-beauty': 'salon',
-          'hotel': 'hotel-property',
-          'hotel-property': 'hotel-property',
-          'demo-module': 'demo',
-          'demo': 'demo',
-          'pharmastock': 'pharmastock',
-          'pharmacy': 'pharmacy',
-        };
+        const dbMap = new Map<string, any>();
+        sortedDbData.forEach((m: any) => {
+          // If already mapped by a canonical entry, do not overwrite with an alias
+          if (!dbMap.has(m.id)) dbMap.set(m.id, m);
+          if (m.slug && !dbMap.has(m.slug)) dbMap.set(m.slug, m);
+          const mCanonical = toCanonicalModuleId(m.id);
+          if (!dbMap.has(mCanonical)) dbMap.set(mCanonical, m);
+        });
 
         const merged: ModuleManifest[] = [];
+        const processedCanonicalIds = new Set<string>();
         const processedIds = new Set<string>();
 
+        // Sort base modules so canonical definitions come first (e.g. 'demo' before 'demo-module')
+        const sortedBaseModules = [...baseModules].sort((a, b) => {
+          const aCanonical = toCanonicalModuleId(a.id);
+          const bCanonical = toCanonicalModuleId(b.id);
+          const aIsCanonical = a.id === aCanonical ? 0 : 1;
+          const bIsCanonical = b.id === bCanonical ? 0 : 1;
+          return aIsCanonical - bIsCanonical;
+        });
+
         // 1. Process base modules (merge DB overrides if present)
-        for (const baseMod of baseModules) {
-          const canonicalTarget = CANONICAL_ALIAS_MAP[baseMod.id] || (baseMod.slug ? CANONICAL_ALIAS_MAP[baseMod.slug] : null);
+        for (const baseMod of sortedBaseModules) {
+          const canonicalTarget = toCanonicalModuleId(baseMod.id);
+
+          // Deduplicate: If this canonical module has already been processed, skip alias/duplicate entries
+          if (processedCanonicalIds.has(canonicalTarget)) {
+            continue;
+          }
+
           const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null) || (canonicalTarget ? dbMap.get(canonicalTarget) : null);
           if (dbRow) {
             const rawManifest = (typeof dbRow.manifest === 'object' && dbRow.manifest !== null) ? dbRow.manifest : {};
@@ -82,22 +118,26 @@ export async function getModules(): Promise<ModuleManifest[]> {
           } else {
             merged.push(sanitizeManifest(baseMod));
           }
+          processedCanonicalIds.add(canonicalTarget);
           processedIds.add(baseMod.id);
           if (baseMod.slug) processedIds.add(baseMod.slug);
           if (canonicalTarget) processedIds.add(canonicalTarget);
           if (dbRow) {
-            if (dbRow.id) processedIds.add(dbRow.id);
+            if (dbRow.id) {
+              processedIds.add(dbRow.id);
+              processedCanonicalIds.add(toCanonicalModuleId(dbRow.id));
+            }
             if (dbRow.slug) processedIds.add(dbRow.slug);
           }
         }
 
         // 2. Add any third-party / external modules registered in Supabase
-        data.forEach((m: any) => {
-          const mCanonical = CANONICAL_ALIAS_MAP[m.id] || (m.slug ? CANONICAL_ALIAS_MAP[m.slug] : null);
+        sortedDbData.forEach((m: any) => {
+          const mCanonical = toCanonicalModuleId(m.id);
           if (
             !processedIds.has(m.id) &&
             (!m.slug || !processedIds.has(m.slug)) &&
-            (!mCanonical || !processedIds.has(mCanonical))
+            (!mCanonical || (!processedIds.has(mCanonical) && !processedCanonicalIds.has(mCanonical)))
           ) {
             const rawManifest = (typeof m.manifest === 'object' && m.manifest !== null) ? m.manifest : {};
             merged.push(
@@ -139,6 +179,7 @@ export async function getModules(): Promise<ModuleManifest[]> {
               } as ModuleManifest)
             );
             processedIds.add(m.id);
+            if (mCanonical) processedCanonicalIds.add(mCanonical);
           }
         });
 
@@ -147,17 +188,46 @@ export async function getModules(): Promise<ModuleManifest[]> {
     }
   }
 
-  return baseModules.map((m) => sanitizeManifest(m));
+  // Fallback (when Supabase is not configured): deduplicate baseModules by canonical ID
+  const fallbackMerged: ModuleManifest[] = [];
+  const fallbackCanonicalIds = new Set<string>();
+  const sortedFallback = [...baseModules].sort((a, b) => {
+    const aCanonical = toCanonicalModuleId(a.id);
+    const bCanonical = toCanonicalModuleId(b.id);
+    const aIsCanonical = a.id === aCanonical ? 0 : 1;
+    const bIsCanonical = b.id === bCanonical ? 0 : 1;
+    return aIsCanonical - bIsCanonical;
+  });
+
+  for (const mod of sortedFallback) {
+    const canonical = toCanonicalModuleId(mod.id);
+    if (fallbackCanonicalIds.has(canonical)) continue;
+    fallbackCanonicalIds.add(canonical);
+    fallbackMerged.push(sanitizeManifest(mod));
+  }
+
+  return fallbackMerged;
 }
 
 /**
  * Fetch single module by slug or id
  */
 export async function getModule(slugOrId: string): Promise<ModuleManifest | null> {
-  if (!slugOrId) return null;
+  if (!slugOrId || typeof slugOrId !== 'string') return null;
   const clean = slugOrId.trim().toLowerCase();
+  // Validate identifier characters: accept only lowercase letters, digits, hyphens and underscores
+  if (!/^[a-z0-9_-]+$/.test(clean)) {
+    return null;
+  }
+
+  const canonicalId = CANONICAL_ALIAS_MAP[clean] || clean;
   const store = getStore();
-  const baseFound = store.modules.find((m) => m.id === clean || m.slug === clean);
+
+  // Search store: first exact match on canonicalId (e.g. 'demo'), then canonical alias match (e.g. 'garage-auto' for 'garage'), then clean
+  const baseFound =
+    store.modules.find((m) => m.id === canonicalId || m.slug === canonicalId) ||
+    store.modules.find((m) => (CANONICAL_ALIAS_MAP[m.id] || m.id) === canonicalId || (m.slug && (CANONICAL_ALIAS_MAP[m.slug] || m.slug) === canonicalId)) ||
+    store.modules.find((m) => m.id === clean || m.slug === clean);
 
   if (isSupabaseConfigured()) {
     const supabase: any =
@@ -165,11 +235,33 @@ export async function getModule(slugOrId: string): Promise<ModuleManifest | null
         ? createBrowserClient()
         : createAdminClient() || createServerClient();
     if (supabase) {
-      const { data } = await supabase
+      // Step 1: Deterministically query canonical record first
+      const { data: canonicalData, error: canonicalError } = await supabase
         .from('modules')
         .select('*')
-        .or(`id.eq.${clean},slug.eq.${clean}`)
+        .or(`id.eq.${canonicalId},slug.eq.${canonicalId}`)
         .maybeSingle();
+
+      if (canonicalError) {
+        console.error(`[MODULE_LOOKUP_ERROR] Database error fetching canonical module "${canonicalId}", falling back to base store:`, canonicalError.message);
+      }
+
+      let data = canonicalData;
+
+      // Step 2: Fallback to alias record only if canonical record does not exist in DB
+      if (!data && clean !== canonicalId) {
+        const { data: aliasData, error: aliasError } = await supabase
+          .from('modules')
+          .select('*')
+          .or(`id.eq.${clean},slug.eq.${clean}`)
+          .maybeSingle();
+
+        if (aliasError) {
+          console.error(`[MODULE_LOOKUP_ERROR] Database error fetching alias module "${clean}", falling back to base store:`, aliasError.message);
+        }
+
+        data = aliasData;
+      }
 
       if (data) {
         const rawManifest = (typeof data.manifest === 'object' && data.manifest !== null) ? data.manifest : {};
