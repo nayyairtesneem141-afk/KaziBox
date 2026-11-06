@@ -594,7 +594,7 @@ export default function ModuleRegistryDetailPage() {
               Identifiants & Secrets Cryptographiques du SaaS
             </h3>
             <p className="text-xs text-[#6B7280]">
-              Provisionnez ou régénérez la clé API (`kz_live_`), le secret de signature SSO (`kz_sso_`) et le secret HMAC Webhook (`kz_whsec_`).
+              Provisionnez ou régénérez les clés API, le secret de signature SSO (`kz_sso_`) et le secret HMAC Webhook (`kz_whsec_`).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -718,7 +718,7 @@ export default function ModuleRegistryDetailPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div className="p-3.5 rounded-2xl bg-[#F9FAFB] border border-[#E5E7EB]">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-[#1F2937]">Clés API (`kz_live_`)</span>
+              <span className="text-xs font-bold text-[#1F2937]">Clés API</span>
               <Badge variant={apiKeyRecords.length > 0 ? 'green' : 'gray'} size="sm">
                 {apiKeyRecords.length} active(s)
               </Badge>

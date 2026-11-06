@@ -16,6 +16,8 @@ import {
 } from './types';
 import { MOTEUR_PAYMENT_DESCRIPTION, resolveCurrencyForCountry } from './countries';
 import { getPlans } from '../billing';
+import { toCanonicalModuleId, toCanonicalModuleIds, getModuleAliases } from './modules';
+import { calculatePartialRefund, calculateConfirmedNetDeduction, roundHalfUp } from '../pricing-tiers';
 
 /**
  * In-memory registry for pending payment sessions when running without Supabase
@@ -66,7 +68,7 @@ export class MoteurPaymentService {
     companyId: string;
     planId: string;
     planKey?: string;
-    billingCycle: 'monthly' | 'yearly';
+    billingCycle: 'monthly' | 'yearly' | 'flex';
     moduleIds: string[];
     country: 'CD' | 'CM' | 'SN' | 'CI';
     amount: number;
@@ -74,9 +76,17 @@ export class MoteurPaymentService {
     customer?: { id?: string; name?: string; email?: string; phone?: string };
     referralCode?: string;
     returnUrl?: string;
+    netAmount?: number;
+    feeAmount?: number;
+    durationSeconds?: number;
+    monthlyReferencePrice?: number;
+    pricingSnapshot?: any;
+    paymentEventId?: string;
   }): Promise<MoteurInitiatePaymentResponse> {
     const currency = params.currency || resolveCurrencyForCountry(params.country);
     const reference = `KZ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const canonicalModuleIds = toCanonicalModuleIds(params.moduleIds);
 
     const initiateReq: MoteurInitiatePaymentRequest = {
       idempotencyKey: reference,
@@ -93,32 +103,117 @@ export class MoteurPaymentService {
           : params.planKey === 'bundle' || (!params.planKey && params.planId === 'bundle')
           ? 'pro'
           : params.planKey || params.planId || 'starter',
-      moduleIds: params.moduleIds,
-      billingCycle: params.billingCycle,
+      moduleIds: canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds,
+      billingCycle: params.billingCycle as any,
       customer: params.customer,
       // Referral attribution passed along for Moteur to process commissions
       referralCode: params.referralCode,
       returnUrl: params.returnUrl,
     };
 
-    // Store pending session in local registry
+    // 1. Persist authoritative pending checkout record in Supabase BEFORE contacting external gateway
+    if (isSupabaseConfigured()) {
+      const supabase: any = createAdminClient() || createServerClient();
+      if (supabase) {
+        try {
+          const { error: insertErr } = await supabase.from('payment_history').insert({
+            company_id: params.companyId,
+            amount: params.amount,
+            currency,
+            status: 'pending',
+            plan_id: params.planId,
+            billing_cycle: params.billingCycle,
+            module_ids: canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds,
+            description: `Moteur Payment: ${reference} | plan:${params.planId} | cycle:${params.billingCycle} | modules:${(canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds).join(',')}`,
+            reference: reference,
+            invoice_url: '#',
+            net_amount: params.netAmount ?? params.amount,
+            fee_amount: params.feeAmount ?? 0,
+            duration_seconds: params.durationSeconds,
+            monthly_reference_price: params.monthlyReferencePrice,
+            pricing_snapshot: params.pricingSnapshot,
+          });
+
+          if (insertErr) {
+            console.error(`[Moteur] Failed to persist authoritative pending payment record for ${reference}:`, insertErr);
+            return {
+              success: false,
+              reference,
+              sessionId: '',
+              status: 'failed',
+              errorCode: 'PENDING_PAYMENT_PERSISTENCE_FAILED',
+              errorMessage: `Failed to persist authoritative pending payment record: ${insertErr.message || 'Database insert error'}`,
+            };
+          }
+        } catch (dbErr: any) {
+          console.error(`[Moteur] Unexpected error persisting pending payment record for ${reference}:`, dbErr);
+          return {
+            success: false,
+            reference,
+            sessionId: '',
+            status: 'failed',
+            errorCode: 'PENDING_PAYMENT_PERSISTENCE_FAILED',
+            errorMessage: `Unexpected error persisting pending payment record: ${dbErr.message || 'Database exception'}`,
+          };
+        }
+      }
+    }
+
+    // 2. Store pending session in local registry
     const sessions = getSessionsMap();
     sessions.set(reference, {
       reference,
       sessionId: '',
       companyId: params.companyId,
       planId: params.planId,
-      moduleIds: params.moduleIds,
-      billingCycle: params.billingCycle,
+      moduleIds: canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds,
+      billingCycle: params.billingCycle as any,
       amount: params.amount,
       currency,
       status: 'pending',
       referralCode: params.referralCode,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+      netAmount: params.netAmount,
+      feeAmount: params.feeAmount,
+      durationSeconds: params.durationSeconds,
+      monthlyReferencePrice: params.monthlyReferencePrice,
+      pricingSnapshot: params.pricingSnapshot,
+    } as any);
 
-    // Delegate to adapter
+    // Also store pending checkout in local store for development / test environments
+    const store = getStore();
+    const existingIdx = store.payments.findIndex(
+      (p) => p.invoiceNumber === reference || p.id === reference
+    );
+    const pendingPaymentObj = {
+      id: reference,
+      invoiceNumber: reference,
+      amount: params.amount,
+      currency,
+      date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      description: `Moteur Payment: ${reference} | plan:${params.planId} | cycle:${params.billingCycle} | modules:${(canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds).join(',')}`,
+      pdfUrl: '#',
+      reference: reference,
+      companyId: params.companyId,
+      planId: params.planId,
+      billingCycle: params.billingCycle,
+      moduleIds: canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds,
+      netAmount: params.netAmount,
+      feeAmount: params.feeAmount,
+      durationSeconds: params.durationSeconds,
+      monthlyReferencePrice: params.monthlyReferencePrice,
+      pricingSnapshot: params.pricingSnapshot,
+    };
+    if (existingIdx >= 0) {
+      store.payments[existingIdx] = pendingPaymentObj as any;
+    } else {
+      store.payments.push(pendingPaymentObj as any);
+    }
+    setStoreItem('PAYMENTS', store.payments);
+
+    // 3. Delegate to adapter to create external payment session
     const result = await this.adapter.initiatePaymentSession(initiateReq);
 
     const rec = sessions.get(reference);
@@ -134,22 +229,32 @@ export class MoteurPaymentService {
       }
     }
 
-    // Persist pending checkout in Supabase across serverless instances
+    if (!result.success) {
+      const failedIdx = store.payments.findIndex(
+        (p) => p.invoiceNumber === reference || p.id === reference
+      );
+      if (failedIdx >= 0) {
+        store.payments[failedIdx].status = 'failed';
+        setStoreItem('PAYMENTS', store.payments);
+      }
+    }
+
+    // 4. Update the persisted record with sessionId on success or mark failed on rejection
     if (isSupabaseConfigured()) {
       const supabase: any = createAdminClient() || createServerClient();
       if (supabase) {
         try {
-          await supabase.from('payment_history').insert({
-            company_id: params.companyId,
-            amount: params.amount,
-            currency,
-            status: 'pending',
-            description: `Moteur Payment: ${reference} | session:${result.sessionId || ''} | plan:${params.planId} | modules:${(params.moduleIds || []).join(',')}`,
-            reference: reference,
-            invoice_url: '#',
-          });
+          if (result.success && result.sessionId) {
+            await supabase.from('payment_history').update({
+              description: `Moteur Payment: ${reference} | session:${result.sessionId} | plan:${params.planId} | cycle:${params.billingCycle} | modules:${(canonicalModuleIds.length > 0 ? canonicalModuleIds : params.moduleIds).join(',')}`,
+            }).eq('reference', reference);
+          } else if (!result.success) {
+            await supabase.from('payment_history').update({
+              status: 'failed',
+            }).eq('reference', reference);
+          }
         } catch {
-          // Non-blocking
+          // Non-blocking post-initiation status sync
         }
       }
     }
@@ -174,21 +279,105 @@ export class MoteurPaymentService {
     companyId: string;
     planId: string;
     moduleIds: string[];
-    billingCycle: 'monthly' | 'yearly';
+    billingCycle: 'monthly' | 'yearly' | 'flex';
     amount: number;
     currency: string;
     referralCode?: string;
     providerReference?: string;
     paidAt?: string;
+    paymentEventId?: string;
+    netAmount?: number;
+    feeAmount?: number;
+    durationSeconds?: number;
+    monthlyReferencePrice?: number;
+    pricingSnapshot?: any;
   }): Promise<EntitlementGrantResult> {
+    if (data.billingCycle !== 'monthly' && data.billingCycle !== 'yearly' && data.billingCycle !== 'flex') {
+      return {
+        success: false,
+        isDuplicate: false,
+        companyId: data.companyId,
+        status: 'cancelled',
+        planId: data.planId,
+        activatedModuleIds: [],
+        reference: data.reference,
+        message: `Invalid billing cycle: ${data.billingCycle}. Must be "flex", "monthly", or "yearly".`,
+      };
+    }
+
+    // Canonical module resolution for database catalogue compatibility
+    const canonicalModuleIds = toCanonicalModuleIds(data.moduleIds);
+
+    // Verify company match and bind terms against in-memory session if present
+    const sessions = getSessionsMap();
+    const session = sessions.get(data.reference);
+
+    let effectivePlanId = data.planId;
+    let effectiveBillingCycle: 'monthly' | 'yearly' | 'flex' = data.billingCycle;
+    let effectiveModuleIds = canonicalModuleIds.length > 0 ? canonicalModuleIds : data.moduleIds;
+    let effectiveNetAmount = data.netAmount;
+    let effectiveFeeAmount = data.feeAmount;
+    let effectiveDurationSeconds = data.durationSeconds;
+    let effectiveMonthlyRefPrice = data.monthlyReferencePrice;
+    let effectivePricingSnapshot = data.pricingSnapshot;
+    let effectiveEventId = data.paymentEventId;
+
+    if (session) {
+      if (session.companyId && session.companyId !== data.companyId) {
+        return {
+          success: false,
+          isDuplicate: false,
+          companyId: data.companyId,
+          status: 'cancelled',
+          planId: data.planId,
+          activatedModuleIds: [],
+          reference: data.reference,
+          message: 'Payment reference belongs to another company (company mismatch)',
+        };
+      }
+      if (session.planId) effectivePlanId = session.planId;
+      if (session.billingCycle) effectiveBillingCycle = session.billingCycle;
+      if (session.moduleIds?.length) effectiveModuleIds = toCanonicalModuleIds(session.moduleIds);
+      if ((session as any).netAmount != null) effectiveNetAmount = (session as any).netAmount;
+      if ((session as any).feeAmount != null) effectiveFeeAmount = (session as any).feeAmount;
+      if ((session as any).durationSeconds != null) effectiveDurationSeconds = (session as any).durationSeconds;
+      if ((session as any).monthlyReferencePrice != null) effectiveMonthlyRefPrice = (session as any).monthlyReferencePrice;
+      if ((session as any).pricingSnapshot != null) effectivePricingSnapshot = (session as any).pricingSnapshot;
+
+      if (session.amount != null && Number(data.amount) < Number(session.amount)) {
+        return {
+          success: false,
+          isDuplicate: false,
+          companyId: data.companyId,
+          status: 'cancelled',
+          planId: effectivePlanId,
+          activatedModuleIds: [],
+          reference: data.reference,
+          message: `Payment underpaid: confirmed amount (${data.amount}) is less than expected session amount (${session.amount})`,
+        };
+      }
+      if (session.currency && data.currency && session.currency.toUpperCase() !== data.currency.toUpperCase()) {
+        return {
+          success: false,
+          isDuplicate: false,
+          companyId: data.companyId,
+          status: 'cancelled',
+          planId: effectivePlanId,
+          activatedModuleIds: [],
+          reference: data.reference,
+          message: `Payment currency mismatch: confirmed ${data.currency} does not match expected session currency ${session.currency}`,
+        };
+      }
+    }
+
     if (MoteurPaymentService.inFlightReferences.has(data.reference)) {
       return {
         success: true,
         isDuplicate: true,
         companyId: data.companyId,
         status: 'active',
-        planId: data.planId,
-        activatedModuleIds: data.moduleIds,
+        planId: effectivePlanId,
+        activatedModuleIds: effectiveModuleIds,
         reference: data.reference,
         message: 'Payment confirmation currently processing (concurrent duplicate)',
       };
@@ -209,19 +398,75 @@ export class MoteurPaymentService {
           try {
             const { data: existingPayment } = await supabase
               .from('payment_history')
-              .select('id, status, company_id')
+              .select('id, status, company_id, amount, currency, plan_id, billing_cycle, module_ids, description, net_amount, fee_amount, duration_seconds, monthly_reference_price, pricing_snapshot')
               .eq('reference', data.reference)
               .maybeSingle();
 
             if (existingPayment) {
+              if (existingPayment.plan_id) effectivePlanId = existingPayment.plan_id;
+              if (existingPayment.billing_cycle === 'yearly' || existingPayment.billing_cycle === 'monthly' || existingPayment.billing_cycle === 'flex') {
+                effectiveBillingCycle = existingPayment.billing_cycle;
+              }
+              if (existingPayment.module_ids?.length) {
+                effectiveModuleIds = toCanonicalModuleIds(existingPayment.module_ids);
+              } else if (!existingPayment.plan_id && existingPayment.description) {
+                const pMatch = existingPayment.description.match(/plan:([a-z_]+)/i);
+                if (pMatch) effectivePlanId = pMatch[1];
+                const cMatch = existingPayment.description.match(/cycle:([a-z_]+)/i);
+                if (cMatch && (cMatch[1] === 'monthly' || cMatch[1] === 'yearly' || cMatch[1] === 'flex')) effectiveBillingCycle = cMatch[1] as any;
+                const mMatch = existingPayment.description.match(/modules:([a-z0-9_,-]+)/i);
+                if (mMatch) effectiveModuleIds = toCanonicalModuleIds(mMatch[1].split(',').filter(Boolean));
+              }
+              if (existingPayment.net_amount != null) effectiveNetAmount = Number(existingPayment.net_amount);
+              if (existingPayment.fee_amount != null) effectiveFeeAmount = Number(existingPayment.fee_amount);
+              if (existingPayment.duration_seconds != null) effectiveDurationSeconds = Number(existingPayment.duration_seconds);
+              if (existingPayment.monthly_reference_price != null) effectiveMonthlyRefPrice = Number(existingPayment.monthly_reference_price);
+              if (existingPayment.pricing_snapshot != null) effectivePricingSnapshot = existingPayment.pricing_snapshot;
+
+              if (existingPayment.company_id && existingPayment.company_id !== data.companyId) {
+                return {
+                  success: false,
+                  isDuplicate: false,
+                  companyId: data.companyId,
+                  status: 'cancelled',
+                  planId: effectivePlanId,
+                  activatedModuleIds: [],
+                  reference: data.reference,
+                  message: 'Payment reference belongs to another company (company mismatch)',
+                };
+              }
+              if (existingPayment.amount != null && Number(data.amount) < Number(existingPayment.amount)) {
+                return {
+                  success: false,
+                  isDuplicate: false,
+                  companyId: data.companyId,
+                  status: 'cancelled',
+                  planId: effectivePlanId,
+                  activatedModuleIds: [],
+                  reference: data.reference,
+                  message: `Payment underpaid: confirmed amount (${data.amount}) is less than expected amount (${existingPayment.amount})`,
+                };
+              }
+              if (existingPayment.currency && data.currency && existingPayment.currency.toUpperCase() !== data.currency.toUpperCase()) {
+                return {
+                  success: false,
+                  isDuplicate: false,
+                  companyId: data.companyId,
+                  status: 'cancelled',
+                  planId: effectivePlanId,
+                  activatedModuleIds: [],
+                  reference: data.reference,
+                  message: `Payment currency mismatch: confirmed ${data.currency} does not match expected ${existingPayment.currency}`,
+                };
+              }
               if (existingPayment.status === 'paid') {
                 return {
                   success: true,
                   isDuplicate: true,
                   companyId: data.companyId,
                   status: 'active',
-                  planId: data.planId,
-                  activatedModuleIds: data.moduleIds,
+                  planId: effectivePlanId,
+                  activatedModuleIds: effectiveModuleIds,
                   reference: data.reference,
                   message: 'Payment has already been processed and confirmed (idempotent)',
                 };
@@ -233,7 +478,7 @@ export class MoteurPaymentService {
                   isInvalidTransition: true,
                   companyId: data.companyId,
                   status: 'cancelled',
-                  planId: data.planId,
+                  planId: effectivePlanId,
                   activatedModuleIds: [],
                   reference: data.reference,
                   message: `Payment reference is already marked as ${existingPayment.status}; confirmation rejected.`,
@@ -250,12 +495,19 @@ export class MoteurPaymentService {
               p_reference: data.reference,
               p_amount: data.amount,
               p_currency: data.currency,
-              p_plan_id: data.planId,
-              p_billing_cycle: data.billingCycle,
-              p_module_ids: data.moduleIds,
+              p_plan_id: effectivePlanId,
+              p_billing_cycle: effectiveBillingCycle,
+              p_module_ids: effectiveModuleIds,
               p_metadata: {
                 referralCode: data.referralCode || null,
                 countryCode: (data as any).countryCode || null,
+                requestedModuleIds: data.moduleIds || [],
+                payment_event_id: effectiveEventId || null,
+                net_amount: effectiveNetAmount ?? data.amount,
+                fee_amount: effectiveFeeAmount ?? 0,
+                duration_seconds: effectiveDurationSeconds || null,
+                monthly_reference_price: effectiveMonthlyRefPrice || null,
+                pricing_snapshot: effectivePricingSnapshot || null,
               },
             });
 
@@ -272,7 +524,7 @@ export class MoteurPaymentService {
                   isDuplicate: false,
                   companyId: data.companyId,
                   status: 'cancelled',
-                  planId: data.planId,
+                  planId: effectivePlanId,
                   activatedModuleIds: [],
                   reference: data.reference,
                   message: `Database RPC execution error: ${rpcErr.message}`,
@@ -286,8 +538,8 @@ export class MoteurPaymentService {
                   isDuplicate: true,
                   companyId: data.companyId,
                   status: 'active',
-                  planId: data.planId,
-                  activatedModuleIds: data.moduleIds,
+                  planId: effectivePlanId,
+                  activatedModuleIds: effectiveModuleIds,
                   reference: data.reference,
                   message: rpcRes.message || 'Payment already processed (idempotent)',
                 };
@@ -299,7 +551,7 @@ export class MoteurPaymentService {
                   isInvalidTransition: rpcRes.code === 'PAYMENT_ALREADY_TERMINATED',
                   companyId: data.companyId,
                   status: 'cancelled',
-                  planId: data.planId,
+                  planId: effectivePlanId,
                   activatedModuleIds: [],
                   reference: data.reference,
                   message: rpcRes.message || 'Payment parameters validation failed',
@@ -311,25 +563,53 @@ export class MoteurPaymentService {
                   isDuplicate: false,
                   companyId: data.companyId,
                   status: 'cancelled',
-                  planId: data.planId,
+                  planId: effectivePlanId,
                   activatedModuleIds: [],
                   reference: data.reference,
+                  code: rpcRes.code || 'DB_ERROR',
                   message: `Database error: ${rpcRes.message || 'Transaction aborted'}`,
                 };
               }
               if (rpcRes.status === 'success') {
-                const periodEnd = rpcRes.period_end ? new Date(rpcRes.period_end) : new Date(Date.now() + 30 * 86400000);
-                await this.syncLocalStoreAndNotify(data, periodEnd);
+                const periodEnd = rpcRes.period_end
+                  ? new Date(rpcRes.period_end)
+                  : effectiveBillingCycle === 'yearly'
+                  ? new Date(Date.now() + 365 * 86400000)
+                  : effectiveBillingCycle === 'flex' && (effectiveDurationSeconds || rpcRes.duration_seconds)
+                  ? new Date(Date.now() + Number(effectiveDurationSeconds || rpcRes.duration_seconds) * 1000)
+                  : new Date(Date.now() + 30 * 86400000);
+                await this.syncLocalStoreAndNotify(
+                  {
+                    ...data,
+                    planId: effectivePlanId,
+                    billingCycle: effectiveBillingCycle,
+                    moduleIds: effectiveModuleIds,
+                  },
+                  periodEnd
+                );
                 return {
                   success: true,
                   isDuplicate: false,
                   companyId: data.companyId,
                   status: 'active',
-                  planId: data.planId,
-                  activatedModuleIds: data.moduleIds,
+                  planId: effectivePlanId,
+                  activatedModuleIds: effectiveModuleIds,
                   reference: data.reference,
                 };
               }
+
+              // Fail-closed on missing or unknown RPC status contract
+              return {
+                success: false,
+                isDuplicate: false,
+                companyId: data.companyId,
+                status: 'cancelled',
+                planId: effectivePlanId,
+                activatedModuleIds: [],
+                reference: data.reference,
+                code: 'UNEXPECTED_RPC_RESPONSE',
+                message: 'Unexpected RPC response contract from confirm_moteur_payment',
+              };
             }
           } catch (e: any) {
             // Unexpected network/client throw: fail closed
@@ -338,7 +618,7 @@ export class MoteurPaymentService {
               isDuplicate: false,
               companyId: data.companyId,
               status: 'cancelled',
-              planId: data.planId,
+              planId: effectivePlanId,
               activatedModuleIds: [],
               reference: data.reference,
               message: `Unexpected error during RPC call: ${e.message}`,
@@ -407,14 +687,59 @@ export class MoteurPaymentService {
       );
 
       if (existingLocal) {
+        if ((existingLocal as any).planId) effectivePlanId = (existingLocal as any).planId;
+        if ((existingLocal as any).billingCycle) effectiveBillingCycle = (existingLocal as any).billingCycle;
+        if ((existingLocal as any).moduleIds?.length) effectiveModuleIds = toCanonicalModuleIds((existingLocal as any).moduleIds);
+        if ((existingLocal as any).netAmount != null) effectiveNetAmount = (existingLocal as any).netAmount;
+        if ((existingLocal as any).feeAmount != null) effectiveFeeAmount = (existingLocal as any).feeAmount;
+        if ((existingLocal as any).durationSeconds != null) effectiveDurationSeconds = (existingLocal as any).durationSeconds;
+        if ((existingLocal as any).monthlyReferencePrice != null) effectiveMonthlyRefPrice = (existingLocal as any).monthlyReferencePrice;
+        if ((existingLocal as any).pricingSnapshot != null) effectivePricingSnapshot = (existingLocal as any).pricingSnapshot;
+
+        if (existingLocal.companyId && existingLocal.companyId !== data.companyId) {
+          return {
+            success: false,
+            isDuplicate: false,
+            companyId: data.companyId,
+            status: 'cancelled',
+            planId: effectivePlanId,
+            activatedModuleIds: [],
+            reference: data.reference,
+            message: 'Payment reference belongs to another workspace (company mismatch)',
+          };
+        }
+        if (existingLocal.amount != null && Number(data.amount) < Number(existingLocal.amount)) {
+          return {
+            success: false,
+            isDuplicate: false,
+            companyId: data.companyId,
+            status: 'cancelled',
+            planId: effectivePlanId,
+            activatedModuleIds: [],
+            reference: data.reference,
+            message: `Payment underpaid: confirmed amount (${data.amount}) is less than expected local amount (${existingLocal.amount})`,
+          };
+        }
+        if (existingLocal.currency && data.currency && existingLocal.currency.toUpperCase() !== data.currency.toUpperCase()) {
+          return {
+            success: false,
+            isDuplicate: false,
+            companyId: data.companyId,
+            status: 'cancelled',
+            planId: effectivePlanId,
+            activatedModuleIds: [],
+            reference: data.reference,
+            message: `Payment currency mismatch: confirmed ${data.currency} does not match expected local currency ${existingLocal.currency}`,
+          };
+        }
         if (existingLocal.status === 'paid') {
           return {
             success: true,
             isDuplicate: true,
             companyId: data.companyId,
             status: 'active',
-            planId: data.planId,
-            activatedModuleIds: data.moduleIds,
+            planId: effectivePlanId,
+            activatedModuleIds: effectiveModuleIds,
             reference: data.reference,
             message: 'Payment already processed (idempotent)',
           };
@@ -426,7 +751,7 @@ export class MoteurPaymentService {
             isInvalidTransition: true,
             companyId: data.companyId,
             status: 'cancelled',
-            planId: data.planId,
+            planId: effectivePlanId,
             activatedModuleIds: [],
             reference: data.reference,
             message: `Payment reference is already marked as ${existingLocal.status}; confirmation rejected.`,
@@ -469,10 +794,17 @@ export class MoteurPaymentService {
       }
 
       const periodEnd = new Date(baseStartDate);
-      if (data.billingCycle === 'yearly') {
-        periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+      if (effectiveBillingCycle === 'yearly') {
+        periodEnd.setUTCFullYear(periodEnd.getUTCFullYear() + 1);
+      } else if (effectiveBillingCycle === 'flex') {
+        const durSec = Number(effectiveDurationSeconds || (existingLocal as any)?.durationSeconds || 0);
+        if (durSec > 0) {
+          periodEnd.setTime(baseStartDate.getTime() + durSec * 1000);
+        } else {
+          periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+        }
       } else {
-        periodEnd.setMonth(periodEnd.getMonth() + 1);
+        periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
       }
 
     // ── 4. Activate Subscription Entitlements in Supabase ─────────────────────
@@ -491,33 +823,33 @@ export class MoteurPaymentService {
           await supabase
             .from('subscriptions')
             .update({
-              plan_id: data.planId,
+              plan_id: effectivePlanId,
               status: 'active',
               current_period_start: now.toISOString(),
               current_period_end: periodEnd.toISOString(),
               cancel_at_period_end: false,
-              included_module_ids: data.moduleIds,
+              included_module_ids: effectiveModuleIds,
             })
             .eq('id', currentSub.id);
         } else {
           await supabase.from('subscriptions').insert({
             company_id: data.companyId,
-            plan_id: data.planId,
+            plan_id: effectivePlanId,
             status: 'active',
             current_period_start: now.toISOString(),
             current_period_end: periodEnd.toISOString(),
             cancel_at_period_end: false,
-            included_module_ids: data.moduleIds,
+            included_module_ids: effectiveModuleIds,
           });
         }
 
         // Activate each module in company_modules
-        for (const modId of data.moduleIds) {
+        for (const modId of effectiveModuleIds) {
           await supabase.from('company_modules').upsert(
             {
               company_id: data.companyId,
               module_id: modId,
-              plan_id: data.planId,
+              plan_id: effectivePlanId,
               status: 'active',
               activated_at: now.toISOString(),
               expires_at: periodEnd.toISOString(),
@@ -535,21 +867,32 @@ export class MoteurPaymentService {
           status: 'paid',
           description: `Moteur Payment: ${data.reference}`,
           reference: data.reference,
+          plan_id: effectivePlanId,
+          billing_cycle: effectiveBillingCycle,
+          module_ids: effectiveModuleIds,
           invoice_url: '#',
         });
       }
     }
 
     // ── 5. Sync In-Memory Store & Dispatch Events ────────────────────────────
-    await this.syncLocalStoreAndNotify(data, periodEnd);
+    await this.syncLocalStoreAndNotify(
+      {
+        ...data,
+        planId: effectivePlanId,
+        billingCycle: effectiveBillingCycle,
+        moduleIds: effectiveModuleIds,
+      },
+      periodEnd
+    );
 
       return {
         success: true,
         isDuplicate: false,
         companyId: data.companyId,
         status: 'active',
-        planId: data.planId,
-        activatedModuleIds: data.moduleIds,
+        planId: effectivePlanId,
+        activatedModuleIds: effectiveModuleIds,
         currentPeriodStart: now.toISOString(),
         currentPeriodEnd: periodEnd.toISOString(),
         reference: data.reference,
@@ -780,8 +1123,37 @@ export class MoteurPaymentService {
     reference: string;
     companyId: string;
     reason?: string;
-  }): Promise<{ success: boolean; isDuplicate: boolean; reference: string }> {
+    refundAmount?: number;
+    refundedAmount?: number;
+    currency?: string;
+    refundedCurrency?: string;
+    refundEventId?: string;
+    paymentEventId?: string;
+    providerRefundId?: string;
+    providerReference?: string;
+    commissionsReversed?: boolean;
+    reversalTotalCents?: number;
+    transportEventId?: string;
+    rawPayload?: any;
+  }): Promise<{
+    success: boolean;
+    isDuplicate: boolean;
+    reference: string;
+    isPartial?: boolean;
+    refundedAmount?: number;
+    newPeriodEnd?: string;
+    isConflicting?: boolean;
+    isUnmatched?: boolean;
+    retryScheduled?: boolean;
+    requiresManualReview?: boolean;
+    code?: string;
+    message?: string;
+  }> {
     const invoiceNumber = data.reference.startsWith('INV-') ? data.reference : `INV-${data.reference}`;
+    const effectiveRefundAmount = data.refundedAmount ?? data.refundAmount;
+    const effectiveProviderRef = data.providerRefundId || data.providerReference || undefined;
+    const effectiveRefundEventId = data.refundEventId || data.transportEventId || undefined;
+    const effectiveReason = data.reason || 'customer_requested';
 
     // ── 1. Atomic Supabase Refund RPC ─────────────────────────────────────────
     if (isSupabaseConfigured()) {
@@ -791,7 +1163,10 @@ export class MoteurPaymentService {
           const { data: rpcRes, error: rpcErr } = await supabase.rpc('refund_moteur_payment', {
             p_company_id: data.companyId,
             p_reference: data.reference,
-            p_reason: data.reason || 'customer_requested',
+            p_reason: effectiveReason,
+            p_refund_amount: effectiveRefundAmount ?? null,
+            p_refund_event_id: effectiveRefundEventId ?? null,
+            p_provider_reference: effectiveProviderRef ?? null,
           });
 
           if (rpcErr) {
@@ -811,13 +1186,122 @@ export class MoteurPaymentService {
             if (rpcRes.status === 'duplicate') {
               return { success: true, isDuplicate: true, reference: data.reference };
             }
+
+            if (rpcRes.status === 'conflict_quarantined' || rpcRes.code === 'CONFLICTING_PAYLOAD_QUARANTINED' || rpcRes.code === 'CONFLICTING_PAYLOAD_FOR_EVENT') {
+              return {
+                success: true,
+                isDuplicate: false,
+                isConflicting: true,
+                reference: data.reference,
+                message: rpcRes.message,
+              };
+            }
+
+            if (rpcRes.status === 'manual_review_required' || rpcRes.code === 'UNVERIFIED_NET_AMOUNT') {
+              return {
+                success: true,
+                isDuplicate: false,
+                requiresManualReview: true,
+                reference: data.reference,
+                message: rpcRes.message,
+              };
+            }
+
+            if (rpcRes.status === 'unmatched' || rpcRes.code === 'PAYMENT_NOT_FOUND') {
+              // Out-of-order / unmatched refund: Recover original payment via Moteur GET status endpoint
+              try {
+                const verifyRes = await this.adapter.verifyPayment({ reference: data.reference });
+                if (verifyRes && verifyRes.success && verifyRes.status === 'succeeded') {
+                  await this.handlePaymentConfirmation({
+                    reference: data.reference,
+                    companyId: verifyRes.companyId || data.companyId,
+                    planId: verifyRes.planId || 'starter',
+                    moduleIds: verifyRes.moduleIds || [],
+                    billingCycle: (verifyRes.billingCycle as any) || 'flex',
+                    amount: verifyRes.amount,
+                    currency: verifyRes.currency,
+                    providerReference: verifyRes.providerReference,
+                    paidAt: verifyRes.paidAt,
+                    netAmount: (verifyRes as any).netAmount || verifyRes.amount,
+                    feeAmount: (verifyRes as any).feeAmount || 0,
+                  });
+
+                  // Retry atomic refund RPC after successful payment recovery
+                  const { data: retryRpcRes } = await supabase.rpc('refund_moteur_payment', {
+                    p_company_id: data.companyId,
+                    p_reference: data.reference,
+                    p_reason: effectiveReason,
+                    p_refund_amount: effectiveRefundAmount ?? null,
+                    p_refund_event_id: effectiveRefundEventId ?? null,
+                    p_provider_reference: effectiveProviderRef ?? null,
+                  });
+
+                  if (retryRpcRes && retryRpcRes.status === 'success') {
+                    await this.syncLocalStoreOnRefund(data, retryRpcRes);
+                    return {
+                      success: true,
+                      isDuplicate: false,
+                      reference: data.reference,
+                      isPartial: Boolean(retryRpcRes.is_partial),
+                      refundedAmount: retryRpcRes.gross_refund_amount || retryRpcRes.refunded_amount,
+                      newPeriodEnd: retryRpcRes.new_subscription_period_end || retryRpcRes.new_period_end,
+                    };
+                  }
+                }
+              } catch {
+                // Fall through to durable unmapped return
+              }
+
+              return {
+                success: true,
+                isDuplicate: false,
+                isUnmatched: true,
+                retryScheduled: false,
+                reference: data.reference,
+                message: 'Payment record unmatched; recorded to unmapped events awaiting payment confirmation.',
+              };
+            }
+
             if (rpcRes.status === 'invalid') {
-              return { success: false, isDuplicate: false, reference: data.reference };
+              return {
+                success: false,
+                isDuplicate: false,
+                reference: data.reference,
+                code: rpcRes.code || 'INVALID_REFUND_PARAMETERS',
+                message: rpcRes.message || 'Refund parameters validation failed',
+              };
             }
+
+            if (rpcRes.status === 'error') {
+              return {
+                success: false,
+                isDuplicate: false,
+                reference: data.reference,
+                code: rpcRes.code || 'DB_ERROR',
+                message: `Database error during refund: ${rpcRes.message || 'Transaction aborted'}`,
+              };
+            }
+
             if (rpcRes.status === 'success') {
-              await this.syncLocalStoreOnRefund(data);
-              return { success: true, isDuplicate: false, reference: data.reference };
+              const localSync = await this.syncLocalStoreOnRefund(data, rpcRes);
+              return {
+                success: true,
+                isDuplicate: false,
+                reference: data.reference,
+                isPartial: Boolean(rpcRes.is_partial),
+                refundedAmount: rpcRes.gross_refund_amount || rpcRes.refunded_amount,
+                newPeriodEnd: rpcRes.new_subscription_period_end || rpcRes.new_period_end,
+              };
             }
+
+            // Fail closed on missing or unexpected RPC status contract
+            return {
+              success: false,
+              isDuplicate: false,
+              reference: data.reference,
+              code: 'UNEXPECTED_RPC_RESPONSE',
+              message: 'Unexpected RPC response contract from refund_moteur_payment',
+            };
           }
         } catch {
           // Unexpected throw: fail closed
@@ -838,51 +1322,34 @@ export class MoteurPaymentService {
           .from('payment_history')
           .select('*')
           .eq('company_id', data.companyId)
-          .eq('description', `Moteur Payment: ${data.reference}`)
+          .eq('reference', data.reference)
           .maybeSingle();
 
         if (paymentRow) {
-          if (paymentRow.status === 'failed') {
+          const existingRefunds = Array.isArray(paymentRow.refund_history) ? paymentRow.refund_history : [];
+          if (data.refundEventId && existingRefunds.some((r: any) => r.refund_event_id === data.refundEventId)) {
             return { success: true, isDuplicate: true, reference: data.reference };
           }
-          await supabase
-            .from('payment_history')
-            .update({ status: 'failed' })
-            .eq('id', paymentRow.id);
-        }
-
-        // Cancel only the subscription associated with this workspace
-        const { data: activeSub } = await supabase
-          .from('subscriptions')
-          .select('*')
-          .eq('company_id', data.companyId)
-          .eq('status', 'active')
-          .maybeSingle();
-
-        if (activeSub) {
-          await supabase
-            .from('subscriptions')
-            .update({ status: 'cancelled' })
-            .eq('id', activeSub.id);
-
-          const modulesToRevoke = Array.isArray(activeSub.included_module_ids)
-            ? (activeSub.included_module_ids as string[])
-            : [];
-
-          for (const modId of modulesToRevoke) {
-            await supabase
-              .from('company_modules')
-              .update({ status: 'cancelled' })
-              .eq('company_id', data.companyId)
-              .eq('module_id', modId);
+          if (paymentRow.status === 'refunded' && (!data.refundAmount || data.refundAmount >= paymentRow.amount)) {
+            return { success: true, isDuplicate: true, reference: data.reference };
           }
         }
       }
     }
 
     // ── 2. Local Store Refund Persistence ─────────────────────────────────────
-    await this.syncLocalStoreOnRefund(data);
-    return { success: true, isDuplicate: false, reference: data.reference };
+    const localRefundRes = await this.syncLocalStoreOnRefund(data);
+    return {
+      success: true,
+      isDuplicate: localRefundRes.isDuplicate,
+      reference: data.reference,
+      isPartial: localRefundRes.isPartial,
+      newPeriodEnd: localRefundRes.newPeriodEnd ?? undefined,
+      isConflicting: localRefundRes.isConflicting,
+      isUnmatched: localRefundRes.isUnmatched,
+      retryScheduled: false,
+      requiresManualReview: localRefundRes.requiresManualReview,
+    };
   }
 
   /**
@@ -907,13 +1374,22 @@ export class MoteurPaymentService {
       ? data.reference
       : `INV-${data.reference}`;
 
+    const canonicalIds = toCanonicalModuleIds(data.moduleIds);
+    const allModuleIds = Array.from(
+      new Set([
+        ...data.moduleIds,
+        ...canonicalIds,
+        ...data.moduleIds.flatMap(getModuleAliases),
+      ])
+    );
+
     const updatedSub: Subscription = {
       id: `sub-${Date.now()}`,
       companyId: data.companyId,
       planId: data.planId,
       status: 'active',
       billingCycle: (data.billingCycle as 'monthly' | 'yearly') || 'monthly',
-      includedModuleIds: data.moduleIds,
+      includedModuleIds: allModuleIds,
       currentPeriodStart: now.toISOString(),
       currentPeriodEnd: periodEnd.toISOString(),
       renewAt: periodEnd.toISOString(),
@@ -980,46 +1456,281 @@ export class MoteurPaymentService {
    * Helper to sync local store mirror and dispatch events on refund
    */
   private async syncLocalStoreOnRefund(
-    data: { companyId: string; reference: string }
-  ): Promise<void> {
+    data: {
+      companyId: string;
+      reference: string;
+      refundAmount?: number;
+      refundedAmount?: number;
+      currency?: string;
+      refundedCurrency?: string;
+      refundEventId?: string;
+      providerReference?: string;
+      providerRefundId?: string;
+      reason?: string;
+    },
+    rpcRes?: any
+  ): Promise<{
+    isDuplicate: boolean;
+    isPartial: boolean;
+    newPeriodEnd?: string | null;
+    isConflicting?: boolean;
+    isUnmatched?: boolean;
+    retryScheduled?: boolean;
+    requiresManualReview?: boolean;
+  }> {
     const invoiceNumber = data.reference.startsWith('INV-') ? data.reference : `INV-${data.reference}`;
     const store = getStore();
-    const payment = store.payments.find(
+    let payment = store.payments.find(
       (p) => p.invoiceNumber === invoiceNumber || p.id === data.reference
     );
+    const sessions = getSessionsMap();
+    let session = sessions.get(data.reference);
 
-    if (payment) {
-      payment.status = 'failed';
-      setStoreItem('PAYMENTS', store.payments);
+    // If RPC result is provided, apply authoritative values from database
+    if (rpcRes) {
+      const isPartial = Boolean(rpcRes.is_partial);
+      const newPeriodEnd = (rpcRes.new_subscription_period_end || rpcRes.new_period_end) as string | null;
+
+      if (payment) {
+        (payment as any).refundedAmount = rpcRes.gross_refund_amount ?? rpcRes.refunded_amount ?? payment.amount;
+        if (!isPartial) {
+          payment.status = 'failed';
+        }
+        setStoreItem('PAYMENTS', store.payments);
+      }
+
+      const subIdx = store.subscriptions.findIndex(
+        (s) => s.companyId === data.companyId && s.status === 'active'
+      );
+      if (subIdx !== -1) {
+        const sub = store.subscriptions[subIdx];
+        if (!isPartial || (newPeriodEnd && new Date(newPeriodEnd) <= new Date())) {
+          sub.status = 'canceled';
+          if (newPeriodEnd) sub.currentPeriodEnd = newPeriodEnd;
+          setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+          for (const modId of sub.includedModuleIds) {
+            await dispatchWebhookEvent(
+              'subscription.expired',
+              {
+                workspaceId: data.companyId,
+                reason: data.reason || 'refunded',
+                reference: data.reference,
+              },
+              modId
+            );
+          }
+        } else if (newPeriodEnd) {
+          sub.currentPeriodEnd = newPeriodEnd;
+          sub.renewAt = newPeriodEnd;
+          setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+          for (const modId of sub.includedModuleIds) {
+            await dispatchWebhookEvent(
+              'subscription.modified' as any,
+              {
+                workspaceId: data.companyId,
+                newPeriodEnd,
+                reason: 'partial_refund',
+                reference: data.reference,
+              },
+              modId
+            );
+          }
+        }
+      }
+
+      if (session) {
+        session.status = 'refunded';
+        session.updatedAt = new Date().toISOString();
+      }
+
+      return {
+        isDuplicate: false,
+        isPartial,
+        newPeriodEnd,
+      };
+    }
+
+    // Local / In-Memory Fallback
+    // 1. If payment record is missing, attempt recovery via Moteur GET status endpoint
+    if (!payment && !session) {
+      try {
+        const verifyRes = await this.adapter.verifyPayment({ reference: data.reference });
+        if (verifyRes && verifyRes.success && verifyRes.status === 'succeeded') {
+          await this.handlePaymentConfirmation({
+            reference: data.reference,
+            companyId: verifyRes.companyId || data.companyId,
+            planId: verifyRes.planId || 'starter',
+            moduleIds: verifyRes.moduleIds || [],
+            billingCycle: (verifyRes.billingCycle as any) || 'flex',
+            amount: verifyRes.amount,
+            currency: verifyRes.currency,
+            providerReference: verifyRes.providerReference,
+            paidAt: verifyRes.paidAt,
+            netAmount: (verifyRes as any).netAmount || verifyRes.amount,
+            feeAmount: (verifyRes as any).feeAmount || 0,
+          });
+
+          // Re-fetch after confirmation
+          payment = store.payments.find(
+            (p) => p.invoiceNumber === invoiceNumber || p.id === data.reference
+          );
+          session = sessions.get(data.reference);
+        }
+      } catch {
+        // Recovery failed
+      }
+
+      if (!payment && !session) {
+        return {
+          isDuplicate: false,
+          isPartial: false,
+          isUnmatched: true,
+          retryScheduled: false,
+        };
+      }
+    }
+
+    // Check currency mismatch between incoming refund and existing payment
+    const incomingCurr = (data.refundedCurrency || data.currency || '').trim().toUpperCase();
+    const existingCurr = (payment?.currency || session?.currency || '').trim().toUpperCase();
+    if (incomingCurr && existingCurr && incomingCurr !== existingCurr) {
+      return {
+        isDuplicate: false,
+        isPartial: false,
+        requiresManualReview: true,
+      };
+    }
+
+    // 2. Stable event deduplication and conflicting payload detection
+    const existingRefundHistory: any[] = (payment as any)?.refundHistory || [];
+    const effectiveAmt = data.refundedAmount ?? data.refundAmount;
+    if (data.refundEventId) {
+      const existingEvt = existingRefundHistory.find((r: any) => r.refund_event_id === data.refundEventId);
+      if (existingEvt) {
+        if (effectiveAmt !== undefined && existingEvt.amount !== effectiveAmt) {
+          return { isDuplicate: false, isPartial: false, isConflicting: true };
+        }
+        return { isDuplicate: true, isPartial: false };
+      }
+    }
+
+    // 3. Legacy safety: Check for unverified net amount
+    if (payment && ((payment as any).isLegacyUnverified || (payment as any).netAmount === null)) {
+      return { isDuplicate: false, isPartial: false, requiresManualReview: true };
     }
 
     const subIdx = store.subscriptions.findIndex(
       (s) => s.companyId === data.companyId && s.status === 'active'
     );
-    if (subIdx !== -1) {
-      const sub = store.subscriptions[subIdx];
-      sub.status = 'canceled';
-      setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+    const sub = subIdx !== -1 ? store.subscriptions[subIdx] : null;
 
-      for (const modId of sub.includedModuleIds) {
-        await dispatchWebhookEvent(
-          'subscription.expired',
-          {
-            workspaceId: data.companyId,
-            reason: 'refunded',
-            reference: data.reference,
-          },
-          modId
-        );
+    const originalAmount = payment?.amount ?? session?.amount ?? 12;
+    const originalNet = (payment as any)?.netAmount !== undefined ? (payment as any).netAmount : originalAmount;
+    const currency = payment?.currency || session?.currency || 'XOF';
+    const refundAmount = data.refundAmount !== undefined ? data.refundAmount : originalAmount;
+
+    // 4. Calculate confirmed net deduction using confirmed provider rounding contract
+    const netDeductionResult = calculateConfirmedNetDeduction({
+      grossRefundAmount: refundAmount,
+      originalGrossAmount: originalAmount,
+      originalNetAmount: originalNet,
+      cumulativeGrossRefunded: (payment as any)?.refundedAmount ?? 0,
+      cumulativeNetDeducted: (payment as any)?.cumulativeNetDeducted ?? 0,
+      currency,
+    });
+
+    if (netDeductionResult.status === 'manual_review_required') {
+      return { isDuplicate: false, isPartial: false, requiresManualReview: true };
+    }
+    if (netDeductionResult.status === 'duplicate_already_refunded') {
+      return { isDuplicate: true, isPartial: false };
+    }
+
+    let isPartial = false;
+    let newPeriodEnd: string | null = null;
+
+    if (sub && sub.currentPeriodEnd) {
+      try {
+        const refundCalc = calculatePartialRefund({
+          currentPeriodStart: sub.currentPeriodStart || new Date().toISOString(),
+          currentPeriodEnd: sub.currentPeriodEnd,
+          monthlyReferencePrice: originalAmount,
+          refundAmount: netDeductionResult.netDeductionToApply,
+        });
+
+        isPartial = !refundCalc.isFullyExhausted;
+        newPeriodEnd = refundCalc.newPeriodEnd.toISOString();
+
+        if (refundCalc.isFullyExhausted) {
+          sub.status = 'canceled';
+          sub.currentPeriodEnd = new Date().toISOString();
+          setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+
+          for (const modId of sub.includedModuleIds) {
+            await dispatchWebhookEvent(
+              'subscription.expired',
+              {
+                workspaceId: data.companyId,
+                reason: data.reason || 'refunded',
+                reference: data.reference,
+              },
+              modId
+            );
+          }
+        } else {
+          sub.currentPeriodEnd = newPeriodEnd;
+          sub.renewAt = newPeriodEnd;
+          setStoreItem('SUBSCRIPTIONS', store.subscriptions);
+
+          for (const modId of sub.includedModuleIds) {
+            await dispatchWebhookEvent(
+              'subscription.modified' as any,
+              {
+                workspaceId: data.companyId,
+                newPeriodEnd,
+                reason: 'partial_refund',
+                reference: data.reference,
+              },
+              modId
+            );
+          }
+        }
+      } catch {
+        sub.status = 'canceled';
+        setStoreItem('SUBSCRIPTIONS', store.subscriptions);
       }
     }
 
-    const sessions = getSessionsMap();
-    const session = sessions.get(data.reference);
+    if (payment) {
+      (payment as any).refundedAmount = netDeductionResult.newCumulativeGross;
+      (payment as any).cumulativeNetDeducted = netDeductionResult.newCumulativeNet;
+      if (!isPartial) {
+        payment.status = 'failed';
+      }
+      existingRefundHistory.push({
+        refund_event_id: data.refundEventId || `ref_evt_${Date.now()}`,
+        amount: netDeductionResult.grossRefundToApply,
+        net_deduction: netDeductionResult.netDeductionToApply,
+        is_final_refund: netDeductionResult.isFinalRefund,
+        rounding_reconciled: netDeductionResult.roundingReconciled,
+        refunded_at: new Date().toISOString(),
+        provider_reference: data.providerReference || null,
+        reason: data.reason || 'customer_requested',
+      });
+      (payment as any).refundHistory = existingRefundHistory;
+      setStoreItem('PAYMENTS', store.payments);
+    }
+
     if (session) {
       session.status = 'refunded';
       session.updatedAt = new Date().toISOString();
     }
+
+    return {
+      isDuplicate: false,
+      isPartial,
+      newPeriodEnd,
+    };
   }
 
   /**
@@ -1070,6 +1781,14 @@ export class MoteurPaymentService {
       );
 
     if (localSession) {
+      if (fallback?.companyId && localSession.companyId && localSession.companyId !== fallback.companyId) {
+        return {
+          reference: localSession.reference,
+          status: localSession.status,
+          companyId: localSession.companyId,
+        };
+      }
+
       // If still pending and adapter is ready, attempt active verification with Moteur
       if (localSession.status === 'pending' && this.adapter.isReady()) {
         try {
@@ -1083,18 +1802,33 @@ export class MoteurPaymentService {
           const isExpired = rawStatus === 'expired';
 
           if (isSuccess) {
-            await this.handlePaymentConfirmation({
+            const targetCompany = verifyResult.companyId || localSession.companyId;
+            if (verifyResult.companyId && localSession.companyId && verifyResult.companyId !== localSession.companyId) {
+              localSession.status = 'failed';
+              return {
+                reference: localSession.reference,
+                status: 'failed',
+                companyId: localSession.companyId,
+              };
+            }
+
+            const confirmRes = await this.handlePaymentConfirmation({
               reference: localSession.reference,
               sessionId: verifyResult.sessionId || localSession.sessionId,
-              companyId: verifyResult.companyId || localSession.companyId,
-              planId: verifyResult.planId || localSession.planId,
-              moduleIds: verifyResult.moduleIds?.length ? verifyResult.moduleIds : localSession.moduleIds,
-              billingCycle: verifyResult.billingCycle || localSession.billingCycle,
+              companyId: targetCompany,
+              planId: localSession.planId,
+              moduleIds: localSession.moduleIds,
+              billingCycle: localSession.billingCycle,
               amount: verifyResult.amount || localSession.amount,
               currency: verifyResult.currency || localSession.currency,
               paidAt: verifyResult.paidAt,
             });
-            localSession.status = 'succeeded';
+
+            if (confirmRes.success) {
+              localSession.status = 'succeeded';
+            } else {
+              localSession.status = 'failed';
+            }
           } else if (isFailed) {
             await this.handlePaymentFailure({
               reference: localSession.reference,
@@ -1119,21 +1853,32 @@ export class MoteurPaymentService {
       };
     }
 
+    let dbPayment: any = null;
     if (isSupabaseConfigured()) {
       const supabase: any = createAdminClient() || createServerClient();
       if (supabase) {
         try {
           const lookupFilter = fallback?.sessionId
-            ? `reference.eq.${reference},reference.eq.${fallback.sessionId},description.ilike.%${reference}%,description.ilike.%${fallback.sessionId}%`
-            : `reference.eq.${reference},description.ilike.%${reference}%`;
+            ? `reference.eq.${reference},reference.eq.${fallback.sessionId},description.eq.Moteur Payment: ${reference}`
+            : `reference.eq.${reference},description.eq.Moteur Payment: ${reference}`;
 
-          const { data: dbPayment } = await supabase
+          const { data: foundDbPayment } = await supabase
             .from('payment_history')
-            .select('reference, status, company_id, amount, currency')
+            .select('reference, status, company_id, amount, currency, plan_id, billing_cycle, module_ids, description, net_amount, fee_amount, duration_seconds, monthly_reference_price, pricing_snapshot')
             .or(lookupFilter)
             .maybeSingle();
 
+          dbPayment = foundDbPayment;
+
           if (dbPayment) {
+            if (fallback?.companyId && dbPayment.company_id && dbPayment.company_id !== fallback.companyId) {
+              return {
+                reference,
+                status: 'failed',
+                companyId: dbPayment.company_id,
+              };
+            }
+
             const rawStatus = String(dbPayment.status || '').toLowerCase();
             const normalizedStatus =
               rawStatus === 'paid' || rawStatus === 'succeeded' || rawStatus === 'completed'
@@ -1165,6 +1910,14 @@ export class MoteurPaymentService {
         (fallback?.sessionId && (p.invoiceNumber === fallback.sessionId || p.id === fallback.sessionId))
     );
     if (localPayment) {
+      if (fallback?.companyId && localPayment.companyId && localPayment.companyId !== fallback.companyId) {
+        return {
+          reference,
+          status: 'failed',
+          companyId: localPayment.companyId,
+        };
+      }
+
       const rawStatus = String(localPayment.status || '').toLowerCase();
       const normalizedStatus =
         rawStatus === 'paid' || rawStatus === 'succeeded' || rawStatus === 'completed'
@@ -1180,11 +1933,6 @@ export class MoteurPaymentService {
     }
 
     const effectiveCompanyId = fallback?.companyId;
-    const effectivePlanId = fallback?.planId || 'starter';
-    const effectiveModuleIds =
-      fallback?.moduleIds && fallback.moduleIds.length > 0
-        ? fallback.moduleIds
-        : [effectivePlanId === 'starter' ? 'hotel-property' : 'garage'];
 
     // Serverless stateless verification: query Moteur directly if session not in local memory
     if (this.adapter.isReady()) {
@@ -1198,32 +1946,84 @@ export class MoteurPaymentService {
         const isFailed = rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected';
         const isExpired = rawStatus === 'expired';
 
-        const finalCompanyId = verifyResult.companyId || effectiveCompanyId;
-        const finalPlanId = verifyResult.planId || effectivePlanId;
-        const finalModuleIds =
-          verifyResult.moduleIds && verifyResult.moduleIds.length > 0
-            ? verifyResult.moduleIds
-            : effectiveModuleIds;
+        // Recover original terms from stored database checkout record
+        let trustedPlanId = verifyResult.planId;
+        let trustedModuleIds = verifyResult.moduleIds && verifyResult.moduleIds.length > 0 ? verifyResult.moduleIds : undefined;
+        let trustedBillingCycle = (verifyResult.billingCycle === 'yearly' || verifyResult.billingCycle === 'monthly' || (verifyResult.billingCycle as any) === 'flex') ? verifyResult.billingCycle : undefined;
+        let trustedCompanyId = verifyResult.companyId || dbPayment?.company_id || effectiveCompanyId;
+
+        if (dbPayment) {
+          if (dbPayment.company_id) trustedCompanyId = dbPayment.company_id;
+          if (dbPayment.plan_id) trustedPlanId = dbPayment.plan_id;
+          if (dbPayment.billing_cycle === 'monthly' || dbPayment.billing_cycle === 'yearly' || dbPayment.billing_cycle === 'flex') {
+            trustedBillingCycle = dbPayment.billing_cycle;
+          }
+          if (dbPayment.module_ids?.length) trustedModuleIds = dbPayment.module_ids;
+
+          if (!trustedPlanId && dbPayment.description) {
+            const pMatch = dbPayment.description.match(/plan:([a-z_]+)/i);
+            if (pMatch) trustedPlanId = pMatch[1];
+          }
+          if (!trustedBillingCycle && dbPayment.description) {
+            const cMatch = dbPayment.description.match(/cycle:([a-z_]+)/i);
+            if (cMatch && (cMatch[1] === 'monthly' || cMatch[1] === 'yearly' || cMatch[1] === 'flex')) {
+              trustedBillingCycle = cMatch[1] as any;
+            }
+          }
+          if (!trustedModuleIds && dbPayment.description) {
+            const mMatch = dbPayment.description.match(/modules:([a-z0-9_,-]+)/i);
+            if (mMatch) trustedModuleIds = mMatch[1].split(',').filter(Boolean);
+          }
+        }
+
+        const finalCompanyId = trustedCompanyId;
+        const finalPlanId = trustedPlanId || 'starter';
+        const finalModuleIds = trustedModuleIds && trustedModuleIds.length > 0
+          ? toCanonicalModuleIds(trustedModuleIds)
+          : [finalPlanId === 'starter' ? 'hotel-property' : 'garage'];
+        const finalBillingCycle: 'monthly' | 'yearly' | 'flex' =
+          trustedBillingCycle === 'yearly' ? 'yearly' : (trustedBillingCycle as any) === 'flex' ? 'flex' : 'monthly';
 
         if (isSuccess && finalCompanyId) {
-          await this.handlePaymentConfirmation({
+          if (effectiveCompanyId && finalCompanyId !== effectiveCompanyId) {
+            return {
+              reference,
+              status: 'failed',
+              companyId: finalCompanyId,
+            };
+          }
+
+          const confirmed = await this.handlePaymentConfirmation({
             reference,
             sessionId: verifyResult.sessionId || fallback?.sessionId || reference,
             companyId: finalCompanyId,
             planId: finalPlanId,
             moduleIds: finalModuleIds,
-            billingCycle: 'monthly',
-            amount: verifyResult.amount || 15000,
-            currency: verifyResult.currency || 'XOF',
+            billingCycle: finalBillingCycle,
+            amount: verifyResult.amount || dbPayment?.amount || 15000,
+            currency: verifyResult.currency || dbPayment?.currency || 'XOF',
             paidAt: verifyResult.paidAt || new Date().toISOString(),
+            netAmount: (dbPayment?.net_amount != null ? Number(dbPayment.net_amount) : undefined) ?? (localPayment as any)?.netAmount,
+            feeAmount: (dbPayment?.fee_amount != null ? Number(dbPayment.fee_amount) : undefined) ?? (localPayment as any)?.feeAmount,
+            durationSeconds: (dbPayment?.duration_seconds != null ? Number(dbPayment.duration_seconds) : undefined) ?? (localPayment as any)?.durationSeconds,
+            monthlyReferencePrice: (dbPayment?.monthly_reference_price != null ? Number(dbPayment.monthly_reference_price) : undefined) ?? (localPayment as any)?.monthlyReferencePrice,
+            pricingSnapshot: dbPayment?.pricing_snapshot ?? (localPayment as any)?.pricingSnapshot,
           });
+
+          if (confirmed.success) {
+            return {
+              reference,
+              status: 'succeeded',
+              companyId: finalCompanyId,
+              planId: finalPlanId,
+              amount: verifyResult.amount || 15000,
+              currency: verifyResult.currency || 'XOF',
+            };
+          }
           return {
             reference,
-            status: 'succeeded',
+            status: 'failed',
             companyId: finalCompanyId,
-            planId: finalPlanId,
-            amount: verifyResult.amount || 15000,
-            currency: verifyResult.currency || 'XOF',
           };
         } else if (isFailed) {
           if (finalCompanyId) {
@@ -1245,40 +2045,17 @@ export class MoteurPaymentService {
           };
         }
       } catch {
-        // Fall through to interactive sandbox verification
+        // Fall through to pending
       }
     }
 
-    // Interactive return confirmation in sandbox (when MockAdapter redirected with returnStatus completed)
-    const isSandboxReturn =
-      (fallback?.returnStatus === 'completed' || fallback?.returnStatus === 'succeeded') &&
-      effectiveCompanyId;
-
-    if (isSandboxReturn && effectiveCompanyId) {
-      await this.handlePaymentConfirmation({
-        reference,
-        sessionId: fallback?.sessionId || reference,
-        companyId: effectiveCompanyId,
-        planId: effectivePlanId,
-        moduleIds: effectiveModuleIds,
-        billingCycle: 'monthly',
-        amount: 15000,
-        currency: 'XOF',
-        paidAt: new Date().toISOString(),
-      });
-      return {
-        reference,
-        status: 'succeeded',
-        companyId: effectiveCompanyId,
-        planId: effectivePlanId,
-        amount: 15000,
-        currency: 'XOF',
-      };
-    }
-
+    // Authoritative status requirement:
+    // Client-supplied returnStatus query parameters are NEVER accepted to activate paid entitlements.
+    // Authoritative gateway verification or HMAC webhook confirmation is required.
     return {
       reference,
       status: 'pending',
+      companyId: effectiveCompanyId,
     };
   }
 }

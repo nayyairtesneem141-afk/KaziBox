@@ -226,5 +226,6 @@ export interface EntitlementGrantResult {
   currentPeriodStart?: string;
   currentPeriodEnd?: string;
   reference: string;
+  code?: string;
   message?: string;
 }

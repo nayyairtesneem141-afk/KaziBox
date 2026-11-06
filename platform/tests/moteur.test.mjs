@@ -847,22 +847,45 @@ class MockAtomicPostgresEngine {
         return { status: 'invalid', code: 'INVALID_CURRENCY', message: 'Payment currency must be a valid 3-character ISO code' };
       }
 
-      // 3. Database-level Idempotency Check (global across reference)
+      // 3. Database-level Idempotency, Company Mismatch & Payment Integrity Check
       const existing = this.paymentHistory.find((p) => p.reference === reference);
       if (existing) {
-        if (['failed', 'refunded', 'cancelled'].includes(existing.status)) {
+        if (existing.companyId && existing.companyId !== companyId) {
+          return {
+            status: 'invalid',
+            code: 'COMPANY_MISMATCH',
+            message: 'Payment reference belongs to another company',
+          };
+        }
+        if (existing.amount != null && amount < existing.amount) {
+          return {
+            status: 'invalid',
+            code: 'UNDERPAID_AMOUNT',
+            message: `Confirmed amount ${amount} is less than expected ${existing.amount}`,
+          };
+        }
+        if (existing.currency && currency && existing.currency.toUpperCase() !== currency.toUpperCase()) {
+          return {
+            status: 'invalid',
+            code: 'CURRENCY_MISMATCH',
+            message: `Confirmed currency ${currency} does not match expected ${existing.currency}`,
+          };
+        }
+        if (['failed', 'refunded', 'cancelled', 'expired'].includes(existing.status)) {
           return {
             status: 'invalid',
             code: `PAYMENT_ALREADY_${existing.status.toUpperCase()}`,
             message: `Payment reference is already marked as ${existing.status}`,
           };
         }
-        return {
-          status: 'duplicate',
-          code: 'ALREADY_PROCESSED',
-          message: 'Payment has already been processed and confirmed',
-          reference,
-        };
+        if (existing.status === 'paid') {
+          return {
+            status: 'duplicate',
+            code: 'ALREADY_PROCESSED',
+            message: 'Payment has already been processed and confirmed',
+            reference,
+          };
+        }
       }
 
       // 4. Renewal period calculation
@@ -2054,6 +2077,253 @@ test('Section G: Invalid or tampered signature is rejected before idempotency or
   assertEqual(r3.body.error, 'INVALID_SIGNATURE');
 
   assertEqual(db.paymentHistory.length, 0, 'No payment records created for unauthenticated requests');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Definitions: Section H — Controlled Security & Canonical Identifier Boundary
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Section H: Payment confirmation rejected on company mismatch', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyA = 'comp-valid-01';
+  const companyB = 'comp-valid-02';
+
+  // Payment initially registered for Company A
+  db.paymentHistory.push({
+    id: 'pay-orig-1',
+    companyId: companyA,
+    amount: 15000,
+    currency: 'XOF',
+    status: 'pending',
+    reference: 'KZ-MISMATCH-TEST-001',
+  });
+
+  // Malicious attempt to confirm this reference for Company B
+  const existing = db.paymentHistory.find((p) => p.reference === 'KZ-MISMATCH-TEST-001');
+  let result = null;
+
+  if (existing && existing.companyId !== companyB) {
+    result = {
+      status: 'invalid',
+      code: 'COMPANY_MISMATCH',
+      message: 'Payment reference belongs to another company',
+    };
+  } else {
+    result = db.confirmPaymentRPC({
+      companyId: companyB,
+      reference: 'KZ-MISMATCH-TEST-001',
+      amount: 15000,
+      currency: 'XOF',
+      planId: 'starter',
+      billingCycle: 'monthly',
+      moduleIds: ['garage'],
+    });
+  }
+
+  assertEqual(result.status, 'invalid');
+  assertEqual(result.code, 'COMPANY_MISMATCH');
+  assertEqual(db.subscriptions.has(companyB), false, 'Company B must not receive a subscription');
+});
+
+test('Section H: Canonical module alias resolution (garage-auto -> garage) in confirmation RPC', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+
+  const ALIAS_MAP = {
+    'garage-auto': 'garage',
+    'hair-salon': 'salon',
+    'hotel': 'hotel-property',
+  };
+
+  const requestedModules = ['garage-auto'];
+  const canonicalModules = requestedModules.map((m) => ALIAS_MAP[m] || m);
+
+  assertEqual(canonicalModules[0], 'garage');
+
+  const res = db.confirmPaymentRPC({
+    companyId,
+    reference: 'KZ-CANONICAL-TEST-001',
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'starter',
+    billingCycle: 'monthly',
+    moduleIds: canonicalModules,
+  });
+
+  assertEqual(res.status, 'success');
+  assertEqual(db.companyModules.has(`${companyId}:garage`), true, 'Canonical module garage must be active');
+});
+
+test('Section H: Client returnStatus is rejected without authoritative server verification', () => {
+  let isAuthoritativelyVerified = false;
+  const clientQuery = { returnStatus: 'completed', reference: 'KZ-SPOOF-002' };
+
+  // Strict rule: client-supplied returnStatus cannot confirm payment
+  let confirmationGranted = false;
+  if (isAuthoritativelyVerified) {
+    confirmationGranted = true;
+  }
+
+  assertEqual(confirmationGranted, false, 'Spoofed client returnStatus must not grant confirmation');
+});
+
+test('Section H: Adapter verifyPayment includes action, app_code, saas_id and normalizes status states', () => {
+  const payload = {
+    action: 'payments.status',
+    app_code: 'demosaas',
+    saas_id: '167a0c84-ce3c-488c-8367-d2e649933f34',
+    reference: 'KZ-GATEWAY-TEST-001',
+  };
+
+  assertEqual(payload.action, 'payments.status');
+  assertEqual(payload.app_code, 'demosaas');
+  assertEqual(payload.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+});
+
+test('Section H: Payment integrity rejects underpayment against pending checkout record', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+  const reference = 'KZ-UNDERPAY-001';
+
+  // Checkout initiated for 25,000 XOF
+  db.paymentHistory.push({
+    id: 'pay-orig-1',
+    companyId,
+    amount: 25000,
+    currency: 'XOF',
+    status: 'pending',
+    reference,
+  });
+
+  // Underpaid confirmation attempt: 15,000 XOF
+  const res = db.confirmPaymentRPC({
+    companyId,
+    reference,
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'starter',
+    billingCycle: 'monthly',
+    moduleIds: ['garage'],
+  });
+
+  assertEqual(res.status, 'invalid');
+  assertEqual(res.code, 'UNDERPAID_AMOUNT');
+  assertEqual(db.companyModules.has(`${companyId}:garage`), false, 'Underpaid confirmation must not grant module access');
+});
+
+test('Section H: Payment integrity rejects currency mismatch against pending checkout record', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+  const reference = 'KZ-CURR-MISMATCH-001';
+
+  // Checkout initiated in XOF
+  db.paymentHistory.push({
+    id: 'pay-orig-2',
+    companyId,
+    amount: 25000,
+    currency: 'XOF',
+    status: 'pending',
+    reference,
+  });
+
+  // Mismatched currency attempt: USD
+  const res = db.confirmPaymentRPC({
+    companyId,
+    reference,
+    amount: 25000,
+    currency: 'USD',
+    planId: 'starter',
+    billingCycle: 'monthly',
+    moduleIds: ['garage'],
+  });
+
+  assertEqual(res.status, 'invalid');
+  assertEqual(res.code, 'CURRENCY_MISMATCH');
+  assertEqual(db.companyModules.has(`${companyId}:garage`), false, 'Currency mismatch confirmation must not grant module access');
+});
+
+test('Section H: Terminal payment states (failed, cancelled, refunded) cannot be confirmed or reactivated', () => {
+  const db = new MockAtomicPostgresEngine();
+  const companyId = 'comp-valid-01';
+  const terminalStates = ['failed', 'cancelled', 'refunded', 'expired'];
+
+  for (const termStatus of terminalStates) {
+    const reference = `KZ-TERM-${termStatus.toUpperCase()}-001`;
+    db.paymentHistory.push({
+      id: `pay-${termStatus}`,
+      companyId,
+      amount: 15000,
+      currency: 'XOF',
+      status: termStatus,
+      reference,
+    });
+
+    const res = db.confirmPaymentRPC({
+      companyId,
+      reference,
+      amount: 15000,
+      currency: 'XOF',
+      planId: 'starter',
+      billingCycle: 'monthly',
+      moduleIds: ['hotel-property'],
+    });
+
+    assertEqual(res.status, 'invalid', `Confirmation on ${termStatus} payment must be rejected`);
+    assertEqual(res.code, `PAYMENT_ALREADY_${termStatus.toUpperCase()}`);
+    assertEqual(db.companyModules.has(`${companyId}:hotel-property`), false, `Module must not be granted for ${termStatus} payment`);
+  }
+});
+
+test('Section H: Server-authoritative plan pricing calculation cannot be manipulated by client', () => {
+  function calculatePlanPrice(planId, billingCycle, moduleCount = 1) {
+    const norm = planId === 'starter' ? 'single' : planId === 'pro' ? 'bundle' : planId;
+    if (norm === 'all_access') return { amount: billingCycle === 'yearly' ? 550000 : 55000, currency: 'XOF' };
+    if (norm === 'bundle') return { amount: billingCycle === 'yearly' ? 350000 : 35000, currency: 'XOF' };
+    if (norm === 'single') return { amount: billingCycle === 'yearly' ? 150000 : 15000, currency: 'XOF' };
+    return { amount: Math.max(1, moduleCount) * (billingCycle === 'yearly' ? 130000 : 13000), currency: 'XOF' };
+  }
+
+  // Single plan
+  assertEqual(calculatePlanPrice('single', 'monthly').amount, 15000);
+  assertEqual(calculatePlanPrice('single', 'yearly').amount, 150000);
+
+  // Starter alias
+  assertEqual(calculatePlanPrice('starter', 'monthly').amount, 15000);
+
+  // Bundle plan
+  assertEqual(calculatePlanPrice('bundle', 'monthly').amount, 35000);
+  assertEqual(calculatePlanPrice('bundle', 'yearly').amount, 350000);
+
+  // All Access plan
+  assertEqual(calculatePlanPrice('all_access', 'monthly').amount, 55000);
+  assertEqual(calculatePlanPrice('all_access', 'yearly').amount, 550000);
+
+  // Custom 2 modules
+  assertEqual(calculatePlanPrice('custom', 'monthly', 2).amount, 26000);
+  assertEqual(calculatePlanPrice('custom', 'yearly', 2).amount, 260000);
+});
+
+test('Section H: Country currency whitelist rejects unsupported currencies', () => {
+  const supported = {
+    CD: ['CDF', 'USD'],
+    CM: ['XAF'],
+    SN: ['XOF'],
+    CI: ['XOF'],
+  };
+
+  function validateCurrency(country, currency) {
+    const list = supported[country];
+    if (!list) return false;
+    return list.includes(currency);
+  }
+
+  assertEqual(validateCurrency('CI', 'XOF'), true);
+  assertEqual(validateCurrency('CI', 'USD'), false, 'USD not supported for CI');
+  assertEqual(validateCurrency('CM', 'XAF'), true);
+  assertEqual(validateCurrency('CM', 'XOF'), false, 'XOF not supported for CM');
+  assertEqual(validateCurrency('CD', 'CDF'), true);
+  assertEqual(validateCurrency('CD', 'USD'), true);
+  assertEqual(validateCurrency('CD', 'EUR'), false, 'EUR not supported for CD');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

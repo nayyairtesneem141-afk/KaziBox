@@ -11,7 +11,21 @@ import { User, Workspace } from '@kazibox/sdk';
  * with standard JWT / JWKS asymmetric key verification (e.g. jose / jsonwebtoken).
  */
 
-const MOCK_SSO_SECRET = process.env.KAZIBOX_SSO_SECRET || 'kazibox_mock_sso_secret_key_prod_env_replace';
+function getPlatformSsoSecret(): string {
+  const secret = typeof process !== 'undefined' ? process.env?.KAZIBOX_SSO_SECRET : undefined;
+  const env =
+    typeof process !== 'undefined' &&
+    ((process.env.NEXT_PUBLIC_APP_ENV as string) === 'staging' || (process.env.NODE_ENV as string) === 'staging')
+      ? 'staging'
+      : (typeof process !== 'undefined' && process.env.NODE_ENV === 'production' ? 'production' : 'development');
+  if (!secret) {
+    if (env === 'production' || env === 'staging') {
+      throw new Error(`[SECURITY ERROR] KAZIBOX_SSO_SECRET is required in ${env} environment.`);
+    }
+    return 'kazibox_mock_sso_secret_key_prod_env_replace';
+  }
+  return secret;
+}
 
 export interface ModuleTokenPayload {
   userId: string;
@@ -117,7 +131,7 @@ export function issueModuleToken(
   const header = { alg: 'HS256', typ: 'JWT' };
   const encodedHeader = toBase64Url(JSON.stringify(header));
   const encodedPayload = toBase64Url(JSON.stringify(payload));
-  const signature = computeSignature(MOCK_SSO_SECRET, `${encodedHeader}.${encodedPayload}`);
+  const signature = computeSignature(getPlatformSsoSecret(), `${encodedHeader}.${encodedPayload}`);
 
   return `${encodedHeader}.${encodedPayload}.${signature}`;
 }
@@ -136,7 +150,7 @@ export function verifyModuleToken(token: string): { valid: boolean; payload?: Mo
     const [encodedHeader, encodedPayload, signature] = parts;
 
     // Verify signature
-    const expectedSignature = computeSignature(MOCK_SSO_SECRET, `${encodedHeader}.${encodedPayload}`);
+    const expectedSignature = computeSignature(getPlatformSsoSecret(), `${encodedHeader}.${encodedPayload}`);
 
     if (signature !== expectedSignature) {
       return { valid: false, error: 'Invalid token signature' };

@@ -59,7 +59,21 @@ async function handleLaunch(req: NextRequest, { params }: RouteContext) {
   const workspaceCurrency = workspace?.currency || 'XOF';
 
   // 4. Issue cryptographic 5-minute SSO token using module's provisioned SSO secret
-  const { ssoSecret } = await getModuleRuntimeSecrets(mod.id);
+  let ssoSecret: string;
+  try {
+    const secrets = await getModuleRuntimeSecrets(mod.id);
+    ssoSecret = secrets.ssoSecret;
+  } catch (err: any) {
+    const isMissing = err?.code === 'MISSING_MODULE_CREDENTIALS';
+    return NextResponse.json(
+      {
+        success: false,
+        error: err?.message || 'Failed to resolve module SSO secret',
+        code: err?.code || 'SSO_SECRET_ERROR',
+      },
+      { status: isMissing ? 403 : 500 }
+    );
+  }
 
   const token = issueSsoToken(
     {

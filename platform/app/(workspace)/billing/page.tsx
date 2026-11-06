@@ -143,6 +143,17 @@ function BillingPageContent() {
         credentials: 'include',
       });
       if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          // Terminal authentication / cross-workspace failure: halt spinning
+          setCheckoutStage('form');
+          setIsPollingTimeout(false);
+          setPendingReference('');
+          if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('kazibox_pending_checkout');
+          }
+          alert('Session de paiement expirée ou non autorisée pour cet espace.');
+          return true;
+        }
         setPollingErrorCount((prev) => prev + 1);
         return false;
       }
@@ -202,7 +213,12 @@ function BillingPageContent() {
             moduleIds: parsed.moduleIds,
           }).then((isTerminal) => {
             if (!isTerminal) {
-              setIsPollingTimeout(false);
+              // If already marked as timeout or older than 90 seconds, prevent infinite re-spinning
+              if (parsed.isTimeout || ageMs >= 90 * 1000) {
+                setIsPollingTimeout(true);
+              } else {
+                setIsPollingTimeout(false);
+              }
             }
           });
         } else {
@@ -322,6 +338,18 @@ function BillingPageContent() {
       } else if (attempts >= maxAttempts) {
         clearInterval(interval);
         setIsPollingTimeout(true);
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = sessionStorage.getItem('kazibox_pending_checkout');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              sessionStorage.setItem(
+                'kazibox_pending_checkout',
+                JSON.stringify({ ...parsed, isTimeout: true })
+              );
+            }
+          } catch {}
+        }
       }
     }, 3000);
 
@@ -541,10 +569,24 @@ function BillingPageContent() {
                       ? t('common.active')
                       : t('billing.status_expired')}
                   </Badge>
+                  {subscription?.renewAt && (() => {
+                    const diffMs = new Date(subscription.renewAt).getTime() - Date.now();
+                    if (diffMs <= 0) return <Badge variant="red" size="sm">Expiré</Badge>;
+                    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                    const days = Math.floor(diffHours / 24);
+                    const hours = diffHours % 24;
+                    return (
+                      <Badge variant={days > 1 ? 'green' : 'yellow'} size="sm">
+                        ⏱️ {days > 0 ? `${days}j ${hours}h restants` : `${hours}h restantes`}
+                      </Badge>
+                    );
+                  })()}
                 </div>
                 <p className="text-xs sm:text-sm text-[#6B7280] mt-1">
                   {t('billing.workspace_consolidated_charge')} &bull;{' '}
-                  {subscription?.billingCycle === 'yearly'
+                  {(subscription?.billingCycle as any) === 'flex'
+                    ? '⚡ KaziBox Flex (Pay As You Can)'
+                    : subscription?.billingCycle === 'yearly'
                     ? t('billing.yearly_cycle')
                     : t('billing.monthly_cycle')}
                 </p>
@@ -617,7 +659,13 @@ function BillingPageContent() {
                   {t('billing.next_renewal_label')} :{' '}
                   <strong className="text-[#1F2937]">
                     {subscription?.renewAt
-                      ? new Date(subscription.renewAt).toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US')
+                      ? new Date(subscription.renewAt).toLocaleString(language === 'fr' ? 'fr-FR' : 'en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
                       : '01/11/2026'}
                   </strong>
                 </span>

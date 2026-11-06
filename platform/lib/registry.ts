@@ -663,14 +663,60 @@ export function computeLegacyMockHash(secret: string): string {
   return `sha256_mock_${b64.substring(0, 16)}`;
 }
 
-function getMasterEncryptionKey(): Buffer {
-  const rawKey =
-    (typeof process !== 'undefined' &&
-      (process.env?.KAZIBOX_MASTER_KEY ||
-        process.env?.SUPABASE_SERVICE_ROLE_KEY ||
-        process.env?.KAZIBOX_SSO_SECRET)) ||
-    'kazibox_platform_registry_master_key_v1';
-  return crypto.createHash('sha256').update(rawKey, 'utf8').digest();
+/**
+ * Returns the effective runtime environment: 'production', 'staging', 'development', or 'test'.
+ * Note: Preview deployments without NEXT_PUBLIC_APP_ENV=staging are strictly classified as production.
+ */
+export function getRuntimeEnvironment(): 'production' | 'staging' | 'development' | 'test' {
+  if (typeof process === 'undefined') return 'development';
+  if (
+    (process.env.NEXT_PUBLIC_APP_ENV as string) === 'staging' ||
+    (process.env.NODE_ENV as string) === 'staging'
+  ) {
+    return 'staging';
+  }
+  if (process.env.NODE_ENV === 'production') {
+    return 'production';
+  }
+  if (
+    process.env.NODE_ENV === 'test' ||
+    (typeof globalThis !== 'undefined' && (globalThis as any).__kaziboxSupabaseAdminOverride)
+  ) {
+    return 'test';
+  }
+  if (process.env.NODE_ENV === 'development') {
+    return 'development';
+  }
+  return 'development';
+}
+
+/**
+ * Retrieves the cryptographic master key used for AES-256-GCM module secret encryption.
+ * Strictly requires KAZIBOX_MASTER_KEY (>= 32 chars) in staging and production.
+ */
+export function getMasterEncryptionKey(): Buffer {
+  const env = getRuntimeEnvironment();
+  const rawKey = typeof process !== 'undefined' ? process.env?.KAZIBOX_MASTER_KEY : undefined;
+
+  if (env === 'staging' || env === 'production') {
+    if (!rawKey) {
+      const err: any = new Error(
+        `KAZIBOX_MASTER_KEY_REQUIRED: KAZIBOX_MASTER_KEY environment variable is strictly required in ${env} environment.`
+      );
+      err.code = 'KAZIBOX_MASTER_KEY_REQUIRED';
+      throw err;
+    }
+    if (rawKey.length < 32) {
+      const err: any = new Error(
+        `INVALID_MASTER_KEY: KAZIBOX_MASTER_KEY must be at least 32 characters long in ${env} (received ${rawKey.length}).`
+      );
+      err.code = 'INVALID_MASTER_KEY';
+      throw err;
+    }
+  }
+
+  const effectiveKey = rawKey || 'kazibox_platform_dev_master_key_min_32_bytes!';
+  return crypto.createHash('sha256').update(effectiveKey, 'utf8').digest();
 }
 
 /**
@@ -690,6 +736,7 @@ export function encryptModuleSecret(plaintext: string): string {
 
 /**
  * Decrypts an AES-256-GCM encrypted module signing secret on the server.
+ * Throws DECRYPTION_FAILED on corrupted ciphertext, authentication tag mismatch, or wrong key.
  */
 export function decryptModuleSecret(encoded: string): string | null {
   if (!encoded || typeof encoded !== 'string') return null;
@@ -700,16 +747,17 @@ export function decryptModuleSecret(encoded: string): string | null {
       const sub = encoded.slice(encMarkerIdx);
       const parts = sub.split(':');
       // enc : v1 : iv : tag : ciphertext
-      if (parts.length >= 5) {
-        const iv = Buffer.from(parts[2], 'hex');
-        const authTag = Buffer.from(parts[3], 'hex');
-        const ciphertext = Buffer.from(parts[4], 'hex');
-        const key = getMasterEncryptionKey();
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-        decipher.setAuthTag(authTag);
-        const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-        return decrypted.toString('utf8');
+      if (parts.length < 5) {
+        return null;
       }
+      const iv = Buffer.from(parts[2], 'hex');
+      const authTag = Buffer.from(parts[3], 'hex');
+      const ciphertext = Buffer.from(parts[4], 'hex');
+      const key = getMasterEncryptionKey();
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      return decrypted.toString('utf8');
     } catch {
       return null;
     }
@@ -809,63 +857,73 @@ export async function provisionModuleCredentials(
 
   // If called from the browser, delegate to the authoritative server endpoint
   if (typeof window !== 'undefined') {
-    try {
-      const res = await fetch(`/api/v1/modules/registry/${encodeURIComponent(moduleId)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'provision_credentials',
-          credentialType,
-          scope,
-          companyId,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success && data.credentials) {
-        return data.credentials;
-      }
-    } catch {
-      // Fall through to local generation in offline demo mode
+    const res = await fetch(`/api/v1/modules/registry/${encodeURIComponent(moduleId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'provision_credentials',
+        credentialType,
+        scope,
+        companyId,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success && data.credentials) {
+      return data.credentials;
     }
+    const err: any = new Error(data?.error || 'Failed to provision credentials on server');
+    err.code = data?.code || 'PROVISIONING_FAILED';
+    throw err;
   }
 
-  const isStagingOrDev =
-    typeof process !== 'undefined' &&
-    ((process.env.NODE_ENV as string) === 'staging' ||
-      process.env.NODE_ENV === 'development' ||
-      (process.env.NEXT_PUBLIC_APP_ENV as string) === 'staging');
+  const env = getRuntimeEnvironment();
+  const isStagingOrDev = env === 'staging' || env === 'development' || env === 'test';
   const envTag = isStagingOrDev ? 'test' : 'live';
   const nowIso = new Date().toISOString();
   let targetCompany = companyId || DEFAULT_COMPANY_ID;
   const store = getStore();
+
   const supabase: any = isSupabaseConfigured()
-    ? typeof window !== 'undefined'
-      ? createBrowserClient()
-      : createAdminClient() || createServerClient()
+    ? createAdminClient() || createServerClient()
     : null;
+
+  // Credential persistence must fail closed: require valid persistent Supabase admin connection in staging/production
+  if ((env === 'staging' || env === 'production') && !supabase) {
+    const persistenceErr: any = new Error(
+      `DATABASE_PERSISTENCE_ERROR: A valid persistent Supabase admin connection is strictly required for credential provisioning in ${env} environment.`
+    );
+    persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+    throw persistenceErr;
+  }
 
   // Ensure targetCompany satisfies public.module_api_keys.company_id UUID FK when Supabase is active
   if (supabase) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetCompany);
     let companyVerified = false;
     if (isUuid) {
-      const { data: comp } = await supabase
+      const { data: comp, error: compErr } = await supabase
         .from('companies')
         .select('id')
         .eq('id', targetCompany)
         .maybeSingle();
-      if (comp?.id) {
+      if (comp?.id && !compErr) {
         companyVerified = true;
       }
     }
     if (!companyVerified) {
-      const { data: firstComp } = await supabase
+      const { data: firstComp, error: firstCompErr } = await supabase
         .from('companies')
         .select('id')
         .limit(1)
         .maybeSingle();
-      if (firstComp?.id) {
+      if (firstComp?.id && !firstCompErr) {
         targetCompany = firstComp.id;
+      } else if (env === 'staging' || env === 'production') {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Could not resolve valid company_id foreign key in Supabase: ${firstCompErr?.message || 'No companies found'}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        throw persistenceErr;
       }
     }
   }
@@ -891,7 +949,7 @@ export async function provisionModuleCredentials(
     const prefixDisplay = `${prefixBase}...`;
 
     if (supabase) {
-      const { data, error } = await supabase
+      const selectQuery = supabase
         .from('module_api_keys')
         .insert({
           company_id: targetCompany,
@@ -899,11 +957,32 @@ export async function provisionModuleCredentials(
           key_prefix: prefixDisplay,
           key_hash: encodedHash,
         })
-        .select()
-        .single();
-      if (data && !error) {
+        .select();
+
+      const { data, error } =
+        selectQuery && typeof selectQuery.single === 'function'
+          ? await selectQuery.single()
+          : selectQuery && typeof selectQuery.maybeSingle === 'function'
+          ? await selectQuery.maybeSingle()
+          : await selectQuery;
+
+      if (error) {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Failed to persist API key in Supabase: ${error.message}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        persistenceErr.details = error;
+        throw persistenceErr;
+      }
+      if (data?.id) {
         keyId = data.id;
       }
+    } else if (env === 'staging' || env === 'production') {
+      const persistenceErr: any = new Error(
+        `DATABASE_PERSISTENCE_ERROR: A valid persistent Supabase connection is required to provision API keys in ${env} environment.`
+      );
+      persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+      throw persistenceErr;
     }
 
     const record: StoredApiKey = {
@@ -938,25 +1017,49 @@ export async function provisionModuleCredentials(
     });
     const prefixDisplay = `${prefixBase}...`;
 
-    // Remove previous SSO secret records for this module so rotation is clean
-    store.apiKeys = store.apiKeys.filter(
-      (k) => !(k.moduleId === moduleId && (k.type === 'sso_secret' || k.prefix.startsWith('kz_sso_')))
-    );
-
     if (supabase) {
-      await supabase
+      const { error: delErr } = await supabase
         .from('module_api_keys')
         .delete()
         .eq('module_id', moduleId)
         .ilike('key_prefix', 'kz_sso_%');
 
-      await supabase.from('module_api_keys').insert({
+      if (delErr) {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Failed to clean up prior SSO secret in Supabase: ${delErr.message}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        persistenceErr.details = delErr;
+        throw persistenceErr;
+      }
+
+      const { error: insErr } = await supabase.from('module_api_keys').insert({
         company_id: targetCompany,
         module_id: moduleId,
         key_prefix: prefixDisplay,
         key_hash: encodedHash,
       });
+
+      if (insErr) {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Failed to persist SSO secret in Supabase: ${insErr.message}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        persistenceErr.details = insErr;
+        throw persistenceErr;
+      }
+    } else if (env === 'staging' || env === 'production') {
+      const persistenceErr: any = new Error(
+        `DATABASE_PERSISTENCE_ERROR: A valid persistent Supabase connection is required to provision SSO secrets in ${env} environment.`
+      );
+      persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+      throw persistenceErr;
     }
+
+    // Remove previous SSO secret records for this module so rotation is clean
+    store.apiKeys = store.apiKeys.filter(
+      (k) => !(k.moduleId === moduleId && (k.type === 'sso_secret' || k.prefix.startsWith('kz_sso_')))
+    );
 
     store.apiKeys.push({
       id: `sso-${Date.now()}-${rand.substring(0, 4)}`,
@@ -988,25 +1091,49 @@ export async function provisionModuleCredentials(
     });
     const prefixDisplay = `${prefixBase}...`;
 
-    // Remove previous Webhook secret records for this module
-    store.apiKeys = store.apiKeys.filter(
-      (k) => !(k.moduleId === moduleId && (k.type === 'webhook_secret' || k.prefix.startsWith('kz_whsec_')))
-    );
-
     if (supabase) {
-      await supabase
+      const { error: delErr } = await supabase
         .from('module_api_keys')
         .delete()
         .eq('module_id', moduleId)
         .ilike('key_prefix', 'kz_whsec_%');
 
-      await supabase.from('module_api_keys').insert({
+      if (delErr) {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Failed to clean up prior Webhook secret in Supabase: ${delErr.message}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        persistenceErr.details = delErr;
+        throw persistenceErr;
+      }
+
+      const { error: insErr } = await supabase.from('module_api_keys').insert({
         company_id: targetCompany,
         module_id: moduleId,
         key_prefix: prefixDisplay,
         key_hash: encodedHash,
       });
+
+      if (insErr) {
+        const persistenceErr: any = new Error(
+          `DATABASE_PERSISTENCE_ERROR: Failed to persist Webhook secret in Supabase: ${insErr.message}`
+        );
+        persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+        persistenceErr.details = insErr;
+        throw persistenceErr;
+      }
+    } else if (env === 'staging' || env === 'production') {
+      const persistenceErr: any = new Error(
+        `DATABASE_PERSISTENCE_ERROR: A valid persistent Supabase connection is required to provision Webhook secrets in ${env} environment.`
+      );
+      persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+      throw persistenceErr;
     }
+
+    // Remove previous Webhook secret records for this module
+    store.apiKeys = store.apiKeys.filter(
+      (k) => !(k.moduleId === moduleId && (k.type === 'webhook_secret' || k.prefix.startsWith('kz_whsec_')))
+    );
 
     store.apiKeys.push({
       id: `whsec-${Date.now()}-${rand.substring(0, 4)}`,
@@ -1113,21 +1240,43 @@ export async function getApiKeysForModule(moduleId: string, companyId?: string):
   return results;
 }
 
+async function resolveModuleKind(moduleId: string): Promise<'internal' | 'external'> {
+  const cleanId = moduleId.toLowerCase().trim();
+  const store = getStore();
+  const memoryMod = store.modules.find(
+    (m) => m.id.toLowerCase() === cleanId || m.slug?.toLowerCase() === cleanId
+  );
+  if (memoryMod) {
+    return memoryMod.kind === 'internal' ? 'internal' : 'external';
+  }
+
+  if (isSupabaseConfigured() && typeof window === 'undefined') {
+    const supabase: any = createAdminClient() || createServerClient();
+    if (supabase) {
+      const { data } = await supabase
+        .from('modules')
+        .select('id, slug, kind')
+        .or(`id.eq.${cleanId},slug.eq.${cleanId}`)
+        .maybeSingle();
+      if (data) {
+        return data.kind === 'internal' ? 'internal' : 'external';
+      }
+    }
+  }
+
+  // Default to external to fail closed for unknown modules
+  return 'external';
+}
+
 /**
  * Server-only helper that resolves the active decrypted SSO secret and Webhook signing secret
- * for a module, falling back to platform environment variables when not custom-provisioned.
+ * for a module. External modules MUST have custom-provisioned credentials and will never silently
+ * substitute platform fallback secrets. Internal platform modules may use platform-level secrets.
  */
 export async function getModuleRuntimeSecrets(moduleId: string): Promise<{
   ssoSecret: string;
   webhookSecret: string;
 }> {
-  const fallbackSso =
-    (typeof process !== 'undefined' && process.env?.KAZIBOX_SSO_SECRET) ||
-    'kazibox_mock_sso_secret_key_prod_env_replace';
-  const fallbackWebhook =
-    (typeof process !== 'undefined' && process.env?.KAZIBOX_WEBHOOK_SECRET) ||
-    'kz_whsec_mock_african_saas_hmac_secret_2026';
-
   let ssoSecret: string | null = null;
   let webhookSecret: string | null = null;
 
@@ -1144,9 +1293,25 @@ export async function getModuleRuntimeSecrets(moduleId: string): Promise<{
         for (const row of data) {
           const parsed = parseStoredKeyHash(row.key_hash || '', row.key_prefix || '');
           if (parsed.type === 'sso_secret' && !ssoSecret && parsed.encryptedSecret) {
-            ssoSecret = decryptModuleSecret(parsed.encryptedSecret);
+            const dec = decryptModuleSecret(parsed.encryptedSecret);
+            if (!dec) {
+              const err: any = new Error(
+                `DECRYPTION_FAILED: Failed to decrypt SSO secret for module '${moduleId}' with KAZIBOX_MASTER_KEY.`
+              );
+              err.code = 'DECRYPTION_FAILED';
+              throw err;
+            }
+            ssoSecret = dec;
           } else if (parsed.type === 'webhook_secret' && !webhookSecret && parsed.encryptedSecret) {
-            webhookSecret = decryptModuleSecret(parsed.encryptedSecret);
+            const dec = decryptModuleSecret(parsed.encryptedSecret);
+            if (!dec) {
+              const err: any = new Error(
+                `DECRYPTION_FAILED: Failed to decrypt Webhook secret for module '${moduleId}' with KAZIBOX_MASTER_KEY.`
+              );
+              err.code = 'DECRYPTION_FAILED';
+              throw err;
+            }
+            webhookSecret = dec;
           }
         }
       }
@@ -1160,16 +1325,69 @@ export async function getModuleRuntimeSecrets(moduleId: string): Promise<{
     const parsed = parseStoredKeyHash(k.hashedSecret || '', k.prefix || '');
     const enc = k.encryptedSecret || parsed.encryptedSecret;
     if ((k.type === 'sso_secret' || parsed.type === 'sso_secret') && !ssoSecret && enc) {
-      ssoSecret = decryptModuleSecret(enc);
+      const dec = decryptModuleSecret(enc);
+      if (!dec) {
+        const err: any = new Error(
+          `DECRYPTION_FAILED: Failed to decrypt SSO secret for module '${moduleId}' with KAZIBOX_MASTER_KEY.`
+        );
+        err.code = 'DECRYPTION_FAILED';
+        throw err;
+      }
+      ssoSecret = dec;
     }
     if ((k.type === 'webhook_secret' || parsed.type === 'webhook_secret') && !webhookSecret && enc) {
-      webhookSecret = decryptModuleSecret(enc);
+      const dec = decryptModuleSecret(enc);
+      if (!dec) {
+        const err: any = new Error(
+          `DECRYPTION_FAILED: Failed to decrypt Webhook secret for module '${moduleId}' with KAZIBOX_MASTER_KEY.`
+        );
+        err.code = 'DECRYPTION_FAILED';
+        throw err;
+      }
+      webhookSecret = dec;
+    }
+  }
+
+  // If dedicated provisioned secrets are found for both SSO and Webhook, return them
+  if (ssoSecret && webhookSecret) {
+    return {
+      ssoSecret,
+      webhookSecret,
+    };
+  }
+
+  const kind = await resolveModuleKind(moduleId);
+  const isExternal = kind === 'external';
+
+  if (isExternal) {
+    const missingItems: string[] = [];
+    if (!ssoSecret) missingItems.push('SSO secret');
+    if (!webhookSecret) missingItems.push('Webhook signing secret');
+    const err: any = new Error(
+      `MISSING_MODULE_CREDENTIALS: External SaaS module '${moduleId}' has no provisioned credentials (${missingItems.join(', ')} missing). Dedicated credentials must be provisioned before SSO or Webhooks can be used.`
+    );
+    err.code = 'MISSING_MODULE_CREDENTIALS';
+    throw err;
+  }
+
+  // Internal platform modules can use platform-level signing secrets
+  const env = getRuntimeEnvironment();
+  const platformSso = typeof process !== 'undefined' ? process.env?.KAZIBOX_SSO_SECRET : undefined;
+  const platformWebhook = typeof process !== 'undefined' ? process.env?.KAZIBOX_WEBHOOK_SECRET : undefined;
+
+  if (env === 'staging' || env === 'production') {
+    if ((!ssoSecret && !platformSso) || (!webhookSecret && !platformWebhook)) {
+      const err: any = new Error(
+        `MISSING_PLATFORM_SECRETS: Platform SSO and Webhook secrets (KAZIBOX_SSO_SECRET, KAZIBOX_WEBHOOK_SECRET) are required in ${env} environment for internal module '${moduleId}'.`
+      );
+      err.code = 'MISSING_PLATFORM_SECRETS';
+      throw err;
     }
   }
 
   return {
-    ssoSecret: ssoSecret || fallbackSso,
-    webhookSecret: webhookSecret || fallbackWebhook,
+    ssoSecret: ssoSecret || platformSso || 'kazibox_internal_sso_test_secret',
+    webhookSecret: webhookSecret || platformWebhook || 'kz_whsec_internal_test_secret',
   };
 }
 
@@ -1288,10 +1506,19 @@ export async function registerOrSaveModule(
 
   let credentials: ProvisionedCredentials | undefined;
   if (options.provisionCredentials !== false) {
-    credentials = await provisionModuleCredentials(cleanId, options.companyId, {
-      credentialType: 'all',
-      scope: 'platform',
-    });
+    try {
+      credentials = await provisionModuleCredentials(cleanId, options.companyId, {
+        credentialType: 'all',
+        scope: 'platform',
+      });
+    } catch (err: any) {
+      return {
+        success: false,
+        statusCode: 500,
+        error: err?.message || 'Failed to persist module credentials in database',
+        code: err?.code || 'DATABASE_PERSISTENCE_ERROR',
+      };
+    }
   }
 
   return {

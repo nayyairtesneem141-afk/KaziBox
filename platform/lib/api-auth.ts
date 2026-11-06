@@ -5,6 +5,7 @@ import {
   computeSha256Hash,
   computeLegacyMockHash,
   parseStoredKeyHash,
+  getRuntimeEnvironment,
 } from './registry';
 import { ModuleManifest, Workspace } from '@kazibox/sdk';
 import { createAdminClient } from './supabase/admin';
@@ -121,7 +122,22 @@ export async function authenticateModuleApiKey(
     };
   }
 
-  // 3. Resolve API Key by cryptographic hash
+  // 3. Reject test API keys in production environment
+  const env = getRuntimeEnvironment();
+  if (env === 'production' && apiKey.startsWith('kz_test_')) {
+    return {
+      errorResponse: NextResponse.json(
+        {
+          error: 'Forbidden',
+          code: 'TEST_KEY_REJECTED_IN_PRODUCTION',
+          message: 'Test API keys (kz_test_*) are strictly prohibited in the production environment.',
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  // 4. Resolve API Key by cryptographic hash
   const store = getStore();
   const sha256Hash = computeSha256Hash(apiKey);
   const legacyHash = computeLegacyMockHash(apiKey);

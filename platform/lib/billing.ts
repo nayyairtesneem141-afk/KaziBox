@@ -117,6 +117,65 @@ export async function getPlans(): Promise<Plan[]> {
 }
 
 /**
+ * Calculates authoritative server-side price for a given plan, billing cycle, and module list.
+ * Prevents client-side price tampering.
+ */
+export function calculatePlanPrice(
+  planId: string,
+  billingCycle: 'monthly' | 'yearly' | 'flex' | string,
+  moduleCount: number = 1,
+  currency: string = 'XOF'
+): { amount: number; currency: string } {
+  if (billingCycle === 'flex') {
+    throw new Error(
+      'KaziBox Flex billing does not use static legacy plan pricing. Use resolveApplicableTierPrice() from "@/lib/pricing-tiers".'
+    );
+  }
+  if (billingCycle !== 'monthly' && billingCycle !== 'yearly') {
+    throw new Error(`Invalid billing cycle "${billingCycle}". Must be "monthly" or "yearly".`);
+  }
+
+  const curr = (currency || 'XOF').toUpperCase();
+  if (curr !== 'XOF' && curr !== 'XAF') {
+    throw new Error(
+      `Currency "${curr}" does not have verified plan pricing. Supported billing currencies are: XOF, XAF.`
+    );
+  }
+
+  const normPlanId =
+    planId === 'starter' ? 'single' : planId === 'pro' ? 'bundle' : planId;
+
+  if (normPlanId === 'all_access') {
+    return {
+      amount: billingCycle === 'yearly' ? 550000 : 55000,
+      currency: curr,
+    };
+  }
+
+  if (normPlanId === 'bundle') {
+    return {
+      amount: billingCycle === 'yearly' ? 350000 : 35000,
+      currency: curr,
+    };
+  }
+
+  if (normPlanId === 'single') {
+    return {
+      amount: billingCycle === 'yearly' ? 150000 : 15000,
+      currency: curr,
+    };
+  }
+
+  // Custom (à la carte)
+  const count = Math.max(1, moduleCount);
+  const unitRate = billingCycle === 'yearly' ? 130000 : 13000;
+  return {
+    amount: count * unitRate,
+    currency: curr,
+  };
+}
+
+/**
  * Fetch active or latest subscription for current workspace
  */
 export async function getSubscription(companyId: string): Promise<Subscription | null> {

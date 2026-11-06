@@ -219,17 +219,31 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const credentials = await provisionModuleCredentials(mod.id, auth.session.companyId, {
-    credentialType,
-    scope: body?.scope === 'workspace' ? 'workspace' : 'platform',
-  });
+  try {
+    const credentials = await provisionModuleCredentials(mod.id, auth.session.companyId, {
+      credentialType,
+      scope: body?.scope === 'workspace' ? 'workspace' : 'platform',
+    });
 
-  return NextResponse.json(
-    {
-      success: true,
-      moduleId: mod.id,
-      credentials,
-    },
-    { status: 201 }
-  );
+    return NextResponse.json(
+      {
+        success: true,
+        moduleId: mod.id,
+        credentials,
+      },
+      { status: 201 }
+    );
+  } catch (err: any) {
+    const isPersistenceErr =
+      err?.code === 'DATABASE_PERSISTENCE_ERROR' ||
+      err?.message?.includes('DATABASE_PERSISTENCE_ERROR');
+    return NextResponse.json(
+      {
+        success: false,
+        error: err?.message || 'Failed to provision credentials',
+        code: isPersistenceErr ? 'DATABASE_PERSISTENCE_ERROR' : (err?.code || 'PROVISIONING_FAILED'),
+      },
+      { status: 500 }
+    );
+  }
 }

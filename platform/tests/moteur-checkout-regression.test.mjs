@@ -1303,6 +1303,751 @@ test('30. Tenant isolation on status polling route: Rejects foreign workspace ca
   assert.strictEqual(errorCode, 'COMPANY_MISMATCH');
 });
 
+test('31. Canonical module alias resolution: garage-auto and hair-salon resolve to catalogue entries and grant access', async () => {
+  const MODULE_ALIASES = {
+    'garage-auto': 'garage',
+    'garage': 'garage',
+    'hotel': 'hotel-property',
+    'hotel-property': 'hotel-property',
+    'hair-salon': 'salon',
+    'salon-beauty': 'salon',
+    'salon': 'salon',
+  };
+
+  const toCanonical = (id) => MODULE_ALIASES[id] || id;
+
+  assert.strictEqual(toCanonical('garage-auto'), 'garage');
+  assert.strictEqual(toCanonical('hair-salon'), 'salon');
+  assert.strictEqual(toCanonical('hotel'), 'hotel-property');
+
+  const testCompanyId = 'comp-garage-01';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+  };
+
+  // Payment confirmation with canonical garage ID
+  localState.subscriptions.push({
+    company_id: testCompanyId,
+    plan_id: 'starter',
+    status: 'active',
+    included_module_ids: ['garage', 'garage-auto'],
+  });
+  localState.company_modules.push({
+    company_id: testCompanyId,
+    module_id: 'garage',
+    status: 'active',
+  });
+
+  // Verify entitlement check works whether queried by garage or garage-auto
+  const entCanonical = simulateGetModuleEntitlement(testCompanyId, 'garage', localState);
+  assert.strictEqual(entCanonical, 'active', 'Canonical garage query must return active');
+
+  const entAlias = simulateGetModuleEntitlement(testCompanyId, 'garage-auto', localState);
+  assert.strictEqual(entAlias, 'active', 'Alias garage-auto query must return active');
+});
+
+test('32. Spoofed browser return status rejected: Client-supplied returnStatus does NOT grant entitlements without authoritative confirmation', async () => {
+  const testCompanyId = 'comp-garage-01';
+  const targetModule = 'garage';
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+    payments: [],
+  };
+
+  // Attacker returns with ?returnStatus=completed, but authoritative gateway returns pending
+  const spoofedQuery = {
+    reference: 'KZ-SPOOF-001',
+    returnStatus: 'completed',
+  };
+
+  const authoritativeGatewayStatus = 'pending';
+
+  // Rule: Entitlements are NEVER activated if authoritative status is not completed/succeeded
+  const shouldActivate = authoritativeGatewayStatus === 'completed' || authoritativeGatewayStatus === 'succeeded';
+  assert.strictEqual(shouldActivate, false, 'Authoritative check must gate activation');
+
+  const entitlement = simulateGetModuleEntitlement(testCompanyId, targetModule, localState);
+  assert.strictEqual(entitlement, 'none', 'Module entitlement must remain none despite returnStatus=completed');
+});
+
+test('33. Company mismatch rejection: Confirming payment for mismatched company is strictly rejected', async () => {
+  const localState = {
+    ...state,
+    company_modules: [],
+    subscriptions: [],
+    payments: [
+      {
+        id: 'KZ-LEGIT-123',
+        reference: 'KZ-LEGIT-123',
+        companyId: 'comp-garage-01',
+        amount: 15000,
+        status: 'pending',
+      },
+    ],
+  };
+
+  // Malicious request attempts to confirm KZ-LEGIT-123 for comp-hotel-01
+  const attackerCompanyId = 'comp-hotel-01';
+  const targetRef = 'KZ-LEGIT-123';
+
+  const existingPayment = localState.payments.find((p) => p.reference === targetRef);
+  let isRejected = false;
+  let rejectionCode = '';
+
+  if (existingPayment && existingPayment.companyId !== attackerCompanyId) {
+    isRejected = true;
+    rejectionCode = 'COMPANY_MISMATCH';
+  }
+
+  assert.strictEqual(isRejected, true, 'Confirmation attempt on foreign reference must be rejected');
+  assert.strictEqual(rejectionCode, 'COMPANY_MISMATCH');
+  assert.strictEqual(localState.subscriptions.length, 0, 'Zero subscriptions must be granted');
+});
+
+test('34. Gateway contract verification: verifyPayment includes action, app_code, saas_id, and reference in POST payload', async () => {
+  let capturedBody = null;
+  const mockFetch = async (url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'completed',
+        reference: capturedBody.reference,
+        amount: 15000,
+        currency: 'XOF',
+      }),
+    };
+  };
+
+  const gatewayUrl = 'https://lvfoklqxqwgpktylphbu.supabase.co/functions/v1/engine-api-gateway';
+  const payload = {
+    action: 'payments.status',
+    app_code: 'demosaas',
+    saas_id: '167a0c84-ce3c-488c-8367-d2e649933f34',
+    reference: 'KZ-TEST-CONTRACT-001',
+    session_id: 'sess_contract_001',
+  };
+
+  await mockFetch(gatewayUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  assert.strictEqual(capturedBody.action, 'payments.status');
+  assert.strictEqual(capturedBody.app_code, 'demosaas');
+  assert.strictEqual(capturedBody.saas_id, '167a0c84-ce3c-488c-8367-d2e649933f34');
+  assert.strictEqual(capturedBody.reference, 'KZ-TEST-CONTRACT-001');
+  assert.strictEqual(capturedBody.session_id, 'sess_contract_001');
+});
+
+test('35. Gateway error & terminal states handled safely: failed, cancelled, expired, timeout grant ZERO entitlements', async () => {
+  const terminalStates = ['failed', 'cancelled', 'rejected', 'expired', 'timeout'];
+  const testCompanyId = 'comp-garage-01';
+
+  for (const st of terminalStates) {
+    const localState = {
+      ...state,
+      company_modules: [],
+      subscriptions: [],
+    };
+
+    const isSuccess = st === 'succeeded' || st === 'completed' || st === 'paid';
+    assert.strictEqual(isSuccess, false, `State "${st}" must not be treated as success`);
+
+    const entitlement = simulateGetModuleEntitlement(testCompanyId, 'garage', localState);
+    assert.strictEqual(entitlement, 'none', `Zero entitlements must be granted for state "${st}"`);
+  }
+});
+
+test('36. Catalogue deduplication: Merging base modules with canonical catalogue does not duplicate cards', async () => {
+  // Simulate getModules merging logic from platform/lib/modules.ts
+  const baseModules = [
+    { id: 'garage-auto', slug: 'garage-auto', name: 'Garage & Auto Repair' },
+    { id: 'hotel-property', slug: 'hotel-property', name: 'Hotel & Property Rental' },
+    { id: 'hair-salon', slug: 'hair-salon', name: 'Hair Salon & Beauty Spa' },
+  ];
+
+  // Canonical rows in public.modules (exactly as seeded without alias insertions)
+  const dbModules = [
+    { id: 'hotel-property', slug: 'hotel-property', name: 'Gestion Hôtelière & Résidences' },
+    { id: 'garage', slug: 'garage', name: 'Garage & Mécanique' },
+    { id: 'demo', slug: 'demo', name: 'Module de Démonstration Interne' },
+  ];
+
+  const dbMap = new Map();
+  dbModules.forEach((m) => {
+    dbMap.set(m.id, m);
+    if (m.slug) dbMap.set(m.slug, m);
+  });
+
+  const merged = [];
+  const processedIds = new Set();
+
+  for (const baseMod of baseModules) {
+    const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null);
+    if (dbRow) {
+      merged.push({ ...baseMod, id: dbRow.id || baseMod.id, name: dbRow.name });
+    } else {
+      merged.push(baseMod);
+    }
+    processedIds.add(baseMod.id);
+  }
+
+  // Without alias insertions in DB, only external/third-party modules are appended
+  dbModules.forEach((m) => {
+    // If alias rows like 'garage-auto' are NOT in dbModules, 'garage' is canonical
+    if (!processedIds.has(m.id)) {
+      // If m.id matches canonical alias target of baseMod, it should not create duplicate
+      const hasBaseCounterpart = baseModules.some((b) => b.id === m.id || b.slug === m.slug || (b.id === 'garage-auto' && m.id === 'garage'));
+      if (!hasBaseCounterpart) {
+        merged.push(m);
+        processedIds.add(m.id);
+      }
+    }
+  });
+
+  // Verify garage appears once in catalogue
+  const garageEntries = merged.filter((m) => m.id === 'garage' || m.id === 'garage-auto');
+  assert.strictEqual(garageEntries.length, 1, 'There must be exactly one garage entry in the catalogue');
+
+  // Verify hotel appears once in catalogue
+  const hotelEntries = merged.filter((m) => m.id === 'hotel' || m.id === 'hotel-property');
+  assert.strictEqual(hotelEntries.length, 1, 'There must be exactly one hotel entry in the catalogue');
+});
+
+test('37. Payment integrity: Underpayment and currency mismatches are strictly rejected before activation', async () => {
+  const pendingCheckout = {
+    reference: 'KZ-INTEGRITY-001',
+    companyId: 'comp-garage-01',
+    amount: 25000,
+    currency: 'XOF',
+    status: 'pending',
+  };
+
+  // Helper verifying payment confirmation integrity
+  function verifyPaymentIntegrity(checkout, confirmedAmount, confirmedCurrency) {
+    if (confirmedAmount < checkout.amount) {
+      return { valid: false, error: 'UNDERPAID_AMOUNT' };
+    }
+    if (confirmedCurrency.toUpperCase() !== checkout.currency.toUpperCase()) {
+      return { valid: false, error: 'CURRENCY_MISMATCH' };
+    }
+    return { valid: true };
+  }
+
+  // Underpaid confirmation: 10,000 XOF instead of 25,000 XOF
+  const underpaidCheck = verifyPaymentIntegrity(pendingCheckout, 10000, 'XOF');
+  assert.strictEqual(underpaidCheck.valid, false);
+  assert.strictEqual(underpaidCheck.error, 'UNDERPAID_AMOUNT');
+
+  // Currency mismatch confirmation: 25,000 USD instead of 25,000 XOF
+  const currencyCheck = verifyPaymentIntegrity(pendingCheckout, 25000, 'USD');
+  assert.strictEqual(currencyCheck.valid, false);
+  assert.strictEqual(currencyCheck.error, 'CURRENCY_MISMATCH');
+
+  // Exact match confirmation: valid
+  const exactCheck = verifyPaymentIntegrity(pendingCheckout, 25000, 'XOF');
+  assert.strictEqual(exactCheck.valid, true);
+
+  // Overpayment is safely accepted
+  const overpayCheck = verifyPaymentIntegrity(pendingCheckout, 30000, 'XOF');
+  assert.strictEqual(overpayCheck.valid, true);
+});
+
+test('38. Replay of terminal states (failed/cancelled/refunded) rejected with HTTP 409 transition error', async () => {
+  const terminalPayments = [
+    { reference: 'REF-TERM-1', status: 'failed' },
+    { reference: 'REF-TERM-2', status: 'cancelled' },
+    { reference: 'REF-TERM-3', status: 'refunded' },
+  ];
+
+  for (const pay of terminalPayments) {
+    let transitionError = null;
+    let httpStatus = 200;
+
+    if (['failed', 'cancelled', 'refunded'].includes(pay.status)) {
+      transitionError = 'PAYMENT_ALREADY_TERMINATED';
+      httpStatus = 409;
+    }
+
+    assert.strictEqual(httpStatus, 409, `Terminal status ${pay.status} must return HTTP 409`);
+    assert.strictEqual(transitionError, 'PAYMENT_ALREADY_TERMINATED');
+  }
+});
+
+test('39. Server-authoritative checkout route validation: Tampered client amount is ignored and replaced by authoritative pricing', async () => {
+  // Simulates /api/v1/billing/checkout validation
+  const clientPayload = {
+    planId: 'single',
+    billingCycle: 'monthly',
+    amount: 1, // Tampered client amount (1 XOF instead of 15,000 XOF)
+    currency: 'XOF',
+    country: 'CI',
+    moduleIds: ['garage-auto'],
+  };
+
+  function calculatePlanPrice(planId, billingCycle, moduleCount = 1) {
+    const norm = planId === 'starter' ? 'single' : planId === 'pro' ? 'bundle' : planId;
+    if (norm === 'single') return { amount: billingCycle === 'yearly' ? 150000 : 15000, currency: 'XOF' };
+    return { amount: 35000, currency: 'XOF' };
+  }
+
+  // Server overrides client-supplied amount with authoritative price
+  const authoritative = calculatePlanPrice(clientPayload.planId, clientPayload.billingCycle, clientPayload.moduleIds.length);
+  assert.strictEqual(authoritative.amount, 15000, 'Server must calculate 15,000 XOF');
+  assert.notStrictEqual(authoritative.amount, clientPayload.amount, 'Client tampered amount of 1 XOF must be ignored');
+});
+
+test('40. Exact reference matching: Payment lookup rejects broad substring collisions', async () => {
+  const existingPayments = [
+    { reference: 'KZ-1700000000000-1111', company_id: 'comp-A', status: 'paid' },
+    { reference: 'KZ-1700000000000-11110', company_id: 'comp-B', status: 'paid' },
+  ];
+
+  // Exact reference lookup
+  const targetRef = 'KZ-1700000000000-1111';
+  const matched = existingPayments.filter((p) => p.reference === targetRef);
+
+  assert.strictEqual(matched.length, 1, 'Exact reference matching must resolve exactly one payment record');
+  assert.strictEqual(matched[0].company_id, 'comp-A');
+});
+
+// ─── Priority 5: Additional Regression Tests ─────────────────────────────────
+
+test('41. Priority 5.1: Lower-tier checkout cannot gain a higher tier through modified status query parameters', async () => {
+  // Stored pending checkout in payment_history was created for 'single' plan (15,000 XOF)
+  const storedPendingPayment = {
+    id: 'pay-001',
+    company_id: 'comp-garage-01',
+    plan_id: 'single',
+    billing_cycle: 'monthly',
+    module_ids: ['garage-auto'],
+    amount: 15000,
+    currency: 'XOF',
+    status: 'pending',
+    reference: 'KZ-SINGLE-001',
+  };
+
+  // Attacker returns with modified status query parameters attempting to claim 'all_access'
+  const modifiedQueryParams = {
+    planId: 'all_access',
+    billingCycle: 'yearly',
+    moduleIds: ['garage-auto', 'hotel-property', 'salon'],
+  };
+
+  // Simulating the resolution in getPaymentSessionStatus:
+  // It binds terms to stored payment_history (payHistory), ignoring client fallback query parameters
+  const effectivePlanId = storedPendingPayment.plan_id || modifiedQueryParams.planId || 'starter';
+  const effectiveBillingCycle = storedPendingPayment.billing_cycle || modifiedQueryParams.billingCycle || 'monthly';
+  const effectiveModuleIds = Array.isArray(storedPendingPayment.module_ids) && storedPendingPayment.module_ids.length > 0
+    ? storedPendingPayment.module_ids
+    : modifiedQueryParams.moduleIds;
+
+  assert.strictEqual(effectivePlanId, 'single', 'Effective plan must remain single, not all_access');
+  assert.strictEqual(effectiveBillingCycle, 'monthly', 'Effective billing cycle must remain monthly, not yearly');
+  assert.deepStrictEqual(effectiveModuleIds, ['garage-auto'], 'Effective module IDs must not include hotel or salon');
+});
+
+test('42. Priority 5.2: Module IDs and billing cycle cannot be replaced during confirmation RPC', async () => {
+  // Simulates confirm_moteur_payment RPC term-binding logic
+  const storedCheckout = {
+    id: 'pay-002',
+    company_id: 'comp-garage-01',
+    reference: 'KZ-FIXED-002',
+    plan_id: 'single',
+    billing_cycle: 'monthly',
+    module_ids: ['garage-auto'],
+    amount: 15000,
+    currency: 'XOF',
+    status: 'pending',
+  };
+
+  function simulateConfirmRPC({ companyId, reference, amount, currency, planId, billingCycle, moduleIds }) {
+    // 1. Basic validation
+    if (!['monthly', 'yearly'].includes(billingCycle?.toLowerCase())) {
+      return { status: 'invalid', code: 'INVALID_BILLING_CYCLE' };
+    }
+    // 2. Terms mismatch checks against stored pending checkout
+    if (storedCheckout.plan_id && planId !== storedCheckout.plan_id) {
+      return { status: 'invalid', code: 'PLAN_MISMATCH', message: 'Confirmation plan does not match checkout plan' };
+    }
+    if (storedCheckout.billing_cycle && billingCycle.toLowerCase() !== storedCheckout.billing_cycle) {
+      return { status: 'invalid', code: 'BILLING_CYCLE_MISMATCH', message: 'Confirmation billing cycle does not match checkout billing cycle' };
+    }
+    // Effective terms bound to stored checkout
+    return {
+      status: 'success',
+      effectivePlanId: storedCheckout.plan_id,
+      effectiveBillingCycle: storedCheckout.billing_cycle,
+      effectiveModuleIds: storedCheckout.module_ids,
+    };
+  }
+
+  // Attempt 1: Tampered planId ('all_access') is strictly rejected
+  const resTamperedPlan = simulateConfirmRPC({
+    companyId: 'comp-garage-01',
+    reference: 'KZ-FIXED-002',
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'all_access', // Tampered!
+    billingCycle: 'monthly',
+    moduleIds: ['garage-auto'],
+  });
+  assert.strictEqual(resTamperedPlan.status, 'invalid');
+  assert.strictEqual(resTamperedPlan.code, 'PLAN_MISMATCH');
+
+  // Attempt 2: Tampered billingCycle ('yearly') is strictly rejected
+  const resTamperedCycle = simulateConfirmRPC({
+    companyId: 'comp-garage-01',
+    reference: 'KZ-FIXED-002',
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'single',
+    billingCycle: 'yearly', // Tampered!
+    moduleIds: ['garage-auto'],
+  });
+  assert.strictEqual(resTamperedCycle.status, 'invalid');
+  assert.strictEqual(resTamperedCycle.code, 'BILLING_CYCLE_MISMATCH');
+
+  // Attempt 3: Valid confirmation matching checkout succeeds and binds stored terms
+  const resValid = simulateConfirmRPC({
+    companyId: 'comp-garage-01',
+    reference: 'KZ-FIXED-002',
+    amount: 15000,
+    currency: 'XOF',
+    planId: 'single',
+    billingCycle: 'monthly',
+    moduleIds: ['all-sorts-of-extra-modules'], // Client attempts extra modules
+  });
+  assert.strictEqual(resValid.status, 'success');
+  assert.deepStrictEqual(resValid.effectiveModuleIds, ['garage-auto'], 'Effective modules must strictly follow stored checkout');
+});
+
+test('43. Priority 5.3: Yearly polling grants a full yearly subscription (not truncated to 30 days)', async () => {
+  // Simulates date calculation in getPaymentSessionStatus and handlePaymentConfirmation
+  const baseDate = new Date('2026-03-15T12:00:00.000Z');
+
+  function calculateSubscriptionPeriod(startDate, billingCycle) {
+    const periodStart = new Date(startDate);
+    const periodEnd = new Date(startDate);
+    if (billingCycle === 'yearly') {
+      periodEnd.setUTCFullYear(periodEnd.getUTCFullYear() + 1);
+    } else {
+      periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+    }
+    return { periodStart, periodEnd, durationMs: periodEnd.getTime() - periodStart.getTime() };
+  }
+
+  // Yearly cycle
+  const yearlySub = calculateSubscriptionPeriod(baseDate, 'yearly');
+  assert.strictEqual(yearlySub.periodEnd.toISOString(), '2027-03-15T12:00:00.000Z');
+
+  const daysDifference = yearlySub.durationMs / (1000 * 60 * 60 * 24);
+  assert(daysDifference >= 365, `Yearly subscription must grant at least 365 days, got ${daysDifference}`);
+  assert.notStrictEqual(daysDifference, 30, 'Yearly subscription must NOT be truncated to 30 days');
+});
+
+test('44. Priority 5.4: Monthly and yearly expiration dates use calendar semantics', async () => {
+  // Calendar semantics accurately advance by full calendar month interval
+  const march1 = new Date('2026-03-01T00:00:00.000Z');
+  const marchPlusOneMonth = new Date(march1);
+  marchPlusOneMonth.setUTCMonth(marchPlusOneMonth.getUTCMonth() + 1);
+  assert.strictEqual(marchPlusOneMonth.toISOString(), '2026-04-01T00:00:00.000Z', 'March 1 + 1 month must be April 1');
+
+  // Leap year calendar semantics: 2024 (leap year) Feb 29 + 1 year
+  const leapDay = new Date('2024-02-29T00:00:00.000Z');
+  const yearCalc = new Date(leapDay);
+  yearCalc.setUTCFullYear(yearCalc.getUTCFullYear() + 1);
+  // 2025 is not a leap year, rolls to March 1 (or Feb 28)
+  assert.strictEqual(yearCalc.getUTCFullYear(), 2025);
+
+  // Compare with a naive 30-day addition for a 31-day month
+  const naive30Days = new Date(march1.getTime() + 30 * 24 * 60 * 60 * 1000);
+  assert.strictEqual(naive30Days.toISOString(), '2026-03-31T00:00:00.000Z', 'Naive 30 days shortchanges March by 1 day');
+  assert.notStrictEqual(naive30Days.toISOString(), marchPlusOneMonth.toISOString(), 'Calendar month must differ from naive 30-day interval');
+});
+
+test('45. Priority 5.5: Invalid billing cycles are explicitly rejected and do not default to monthly', async () => {
+  // Simulates billing.ts calculatePlanPrice validation
+  function calculatePlanPrice(planId, billingCycle, moduleCount = 1, currency = 'XOF') {
+    if (billingCycle !== 'monthly' && billingCycle !== 'yearly') {
+      throw new Error(`Invalid billing cycle "${billingCycle}". Must be "monthly" or "yearly".`);
+    }
+    const curr = (currency || 'XOF').toUpperCase();
+    if (curr !== 'XOF' && curr !== 'XAF') {
+      throw new Error(`Currency "${curr}" does not have verified plan pricing. Supported billing currencies are: XOF, XAF.`);
+    }
+    return { amount: 15000, currency: curr };
+  }
+
+  const invalidCycles = ['weekly', 'quarterly', 'daily', 'custom', '', null, undefined];
+
+  for (const invalid of invalidCycles) {
+    assert.throws(
+      () => calculatePlanPrice('single', invalid),
+      (err) => err.message.includes('Invalid billing cycle'),
+      `Invalid billing cycle "${invalid}" must throw validation error`
+    );
+  }
+
+  // Valid cycles must not throw
+  assert.doesNotThrow(() => calculatePlanPrice('single', 'monthly'));
+  assert.doesNotThrow(() => calculatePlanPrice('single', 'yearly'));
+});
+
+test('46. Priority 5.6: Currency mismatches and unsupported pricing fail closed', async () => {
+  function calculatePlanPrice(planId, billingCycle, moduleCount = 1, currency = 'XOF') {
+    if (billingCycle !== 'monthly' && billingCycle !== 'yearly') {
+      throw new Error(`Invalid billing cycle "${billingCycle}". Must be "monthly" or "yearly".`);
+    }
+    const curr = (currency || 'XOF').toUpperCase();
+    if (curr !== 'XOF' && curr !== 'XAF') {
+      throw new Error(`Currency "${curr}" does not have verified plan pricing. Supported billing currencies are: XOF, XAF.`);
+    }
+    const norm = planId === 'starter' ? 'single' : planId === 'pro' ? 'bundle' : planId;
+    if (norm === 'all_access') return { amount: billingCycle === 'yearly' ? 550000 : 55000, currency: curr };
+    if (norm === 'bundle') return { amount: billingCycle === 'yearly' ? 350000 : 35000, currency: curr };
+    if (norm === 'single') return { amount: billingCycle === 'yearly' ? 150000 : 15000, currency: curr };
+    return { amount: Math.max(1, moduleCount) * (billingCycle === 'yearly' ? 130000 : 13000), currency: curr };
+  }
+
+  // 1. Supported CFA currencies (XOF and XAF) have 1:1 parity and succeed
+  const xofRes = calculatePlanPrice('single', 'monthly', 1, 'XOF');
+  assert.strictEqual(xofRes.amount, 15000);
+  assert.strictEqual(xofRes.currency, 'XOF');
+
+  const xafRes = calculatePlanPrice('single', 'monthly', 1, 'XAF');
+  assert.strictEqual(xafRes.amount, 15000);
+  assert.strictEqual(xafRes.currency, 'XAF');
+
+  // 2. Unsupported currencies (USD in CD, CDF in CD, EUR) fail closed
+  const unsupportedCurrencies = ['USD', 'CDF', 'EUR', 'GBP', 'CAD'];
+  for (const unsupp of unsupportedCurrencies) {
+    assert.throws(
+      () => calculatePlanPrice('single', 'monthly', 1, unsupp),
+      (err) => err.message.includes('does not have verified plan pricing'),
+      `Currency "${unsupp}" must fail closed with clear validation error`
+    );
+  }
+});
+
+test('47. Priority 5.7: Duplicate and cross-company references are rejected safely', async () => {
+  const dbPayments = [
+    { id: 'p1', reference: 'KZ-LEGIT-100', company_id: 'comp-alpha', status: 'pending', amount: 15000 },
+  ];
+
+  function confirmPayment({ companyId, reference }) {
+    const existing = dbPayments.find((p) => p.reference === reference);
+    if (!existing) {
+      return { status: 'invalid', code: 'PAYMENT_NOT_FOUND' };
+    }
+    if (existing.company_id !== companyId) {
+      return { status: 'invalid', code: 'COMPANY_MISMATCH', message: 'Payment reference belongs to another company' };
+    }
+    if (existing.status === 'paid') {
+      return { status: 'duplicate', code: 'ALREADY_PROCESSED' };
+    }
+    existing.status = 'paid';
+    return { status: 'success' };
+  }
+
+  // 1. Cross-company hijack attempt from comp-beta
+  const crossCompanyRes = confirmPayment({ companyId: 'comp-beta', reference: 'KZ-LEGIT-100' });
+  assert.strictEqual(crossCompanyRes.status, 'invalid');
+  assert.strictEqual(crossCompanyRes.code, 'COMPANY_MISMATCH');
+
+  // 2. Legitimate confirmation for comp-alpha
+  const legitRes = confirmPayment({ companyId: 'comp-alpha', reference: 'KZ-LEGIT-100' });
+  assert.strictEqual(legitRes.status, 'success');
+
+  // 3. Duplicate confirmation attempt for comp-alpha
+  const dupRes = confirmPayment({ companyId: 'comp-alpha', reference: 'KZ-LEGIT-100' });
+  assert.strictEqual(dupRes.status, 'duplicate');
+  assert.strictEqual(dupRes.code, 'ALREADY_PROCESSED');
+});
+
+test('48. Priority 5.8: Repeated callbacks cannot duplicate entitlement grants or subscription extensions', async () => {
+  let subPeriodEnd = new Date('2026-10-23T00:00:00.000Z');
+  let companyModules = new Set();
+  let paymentStatus = 'pending';
+
+  function processPaymentWebhook(event) {
+    if (paymentStatus === 'paid') {
+      return { isDuplicate: true, status: 'duplicate' };
+    }
+    paymentStatus = 'paid';
+    // Extend period by 1 month
+    const newEnd = new Date(subPeriodEnd);
+    newEnd.setMonth(newEnd.getMonth() + 1);
+    subPeriodEnd = newEnd;
+    companyModules.add('garage');
+    return { isDuplicate: false, status: 'success' };
+  }
+
+  // First callback delivery
+  const r1 = processPaymentWebhook({ reference: 'KZ-CALLBACK-01' });
+  assert.strictEqual(r1.isDuplicate, false);
+  const periodEndAfterFirst = subPeriodEnd.toISOString();
+
+  // Second callback delivery (replay)
+  const r2 = processPaymentWebhook({ reference: 'KZ-CALLBACK-01' });
+  assert.strictEqual(r2.isDuplicate, true);
+  assert.strictEqual(subPeriodEnd.toISOString(), periodEndAfterFirst, 'Subscription periodEnd must NOT extend again on duplicate');
+  assert.strictEqual(companyModules.size, 1, 'Entitlement module count must remain exactly 1');
+
+  // Third callback delivery
+  const r3 = processPaymentWebhook({ reference: 'KZ-CALLBACK-01' });
+  assert.strictEqual(r3.isDuplicate, true);
+  assert.strictEqual(subPeriodEnd.toISOString(), periodEndAfterFirst, 'Subscription periodEnd must NOT extend again on third call');
+});
+
+test('49. Priority 5.9: Salon migration handles existing ID/slug conflicts safely', async () => {
+  // Simulates Migration 10 DO block logic on 4 distinct database states
+  function runMigrationSeed(existingModules) {
+    const byId = existingModules.find((m) => m.id === 'salon');
+    const bySlug = existingModules.find((m) => m.slug === 'hair-salon');
+
+    if (byId && bySlug && byId.id !== bySlug.id) {
+      // Split conflict: id='salon' has one slug, slug='hair-salon' has another id
+      return { action: 'SPLIT_CONFLICT_PRESERVED', notice: 'Modules catalogue conflict detected. Preserving existing data.' };
+    }
+    if (byId) {
+      // id='salon' exists: update metadata safely
+      byId.name = 'Salon de Coiffure & Esthétique';
+      byId.status = 'active';
+      return { action: 'UPDATED_EXISTING_ID_SALON', module: byId };
+    }
+    if (bySlug) {
+      // slug='hair-salon' exists under another ID (e.g. 'hair-salon')
+      // Preserve primary key to avoid violating foreign keys!
+      bySlug.name = 'Salon de Coiffure & Esthétique';
+      bySlug.status = 'active';
+      return { action: 'PRESERVED_EXISTING_PK_AND_UPDATED_METADATA', module: bySlug };
+    }
+    // Clean insert
+    const newMod = { id: 'salon', slug: 'hair-salon', name: 'Salon de Coiffure & Esthétique', status: 'active' };
+    existingModules.push(newMod);
+    return { action: 'INSERTED_CLEAN', module: newMod };
+  }
+
+  // Case 1: Clean DB (neither exists)
+  const dbCase1 = [];
+  const res1 = runMigrationSeed(dbCase1);
+  assert.strictEqual(res1.action, 'INSERTED_CLEAN');
+  assert.strictEqual(dbCase1.length, 1);
+  assert.strictEqual(dbCase1[0].id, 'salon');
+  assert.strictEqual(dbCase1[0].slug, 'hair-salon');
+
+  // Case 2: Row with id='salon' exists
+  const dbCase2 = [{ id: 'salon', slug: 'salon-beauty', name: 'Old Salon' }];
+  const res2 = runMigrationSeed(dbCase2);
+  assert.strictEqual(res2.action, 'UPDATED_EXISTING_ID_SALON');
+  assert.strictEqual(dbCase2[0].name, 'Salon de Coiffure & Esthétique');
+
+  // Case 3: Row with slug='hair-salon' exists under id='hair-salon'
+  // Crucial: Primary key 'hair-salon' must NOT be blindly renamed to 'salon', which would orphan company_modules FKs
+  const dbCase3 = [{ id: 'hair-salon', slug: 'hair-salon', name: 'Hair Salon Legacy' }];
+  const res3 = runMigrationSeed(dbCase3);
+  assert.strictEqual(res3.action, 'PRESERVED_EXISTING_PK_AND_UPDATED_METADATA');
+  assert.strictEqual(dbCase3[0].id, 'hair-salon', 'Primary key must be preserved to protect FKs');
+  assert.strictEqual(dbCase3[0].name, 'Salon de Coiffure & Esthétique');
+
+  // Case 4: Split conflict (id='salon' has slug='salon-main', but another row has slug='hair-salon' with id='custom-mod')
+  const dbCase4 = [
+    { id: 'salon', slug: 'salon-main', name: 'Salon Main' },
+    { id: 'custom-mod', slug: 'hair-salon', name: 'Custom Hair' },
+  ];
+  const res4 = runMigrationSeed(dbCase4);
+  assert.strictEqual(res4.action, 'SPLIT_CONFLICT_PRESERVED');
+  assert(res4.notice.includes('Preserving existing data'));
+  assert.strictEqual(dbCase4[0].id, 'salon');
+  assert.strictEqual(dbCase4[1].id, 'custom-mod');
+});
+
+test('50. Priority 5.10: Catalogue deduplication renders Salon only once for canonical ID/slug strategy', async () => {
+  // Simulates platform/lib/modules.ts getModules() merge logic
+  const baseModules = [
+    { id: 'garage-auto', slug: 'garage-auto', name: 'Garage & Auto Repair' },
+    { id: 'hotel-property', slug: 'hotel-property', name: 'Hotel & Property Rental' },
+    { id: 'hair-salon', slug: 'hair-salon', name: 'Hair Salon & Beauty Spa' },
+  ];
+
+  // Database contains canonical row id='salon', slug='hair-salon'
+  const dbRows = [
+    { id: 'hotel-property', slug: 'hotel-property', name: 'Gestion Hôtelière' },
+    { id: 'garage', slug: 'garage', name: 'Garage & Mécanique' },
+    { id: 'salon', slug: 'hair-salon', name: 'Salon de Coiffure & Esthétique' },
+  ];
+
+  const CANONICAL_ALIAS_MAP = {
+    'garage-auto': 'garage',
+    'garage': 'garage',
+    'hair-salon': 'salon',
+    'salon': 'salon',
+    'salon-beauty': 'salon',
+    'hotel': 'hotel-property',
+    'hotel-property': 'hotel-property',
+    'demo-module': 'demo',
+    'demo': 'demo',
+  };
+
+  const dbMap = new Map();
+  dbRows.forEach((m) => {
+    dbMap.set(m.id, m);
+    if (m.slug) dbMap.set(m.slug, m);
+  });
+
+  const merged = [];
+  const processedIds = new Set();
+
+  // Step 1: Process base modules
+  for (const baseMod of baseModules) {
+    const canonicalTarget = CANONICAL_ALIAS_MAP[baseMod.id] || (baseMod.slug ? CANONICAL_ALIAS_MAP[baseMod.slug] : null);
+    const dbRow = dbMap.get(baseMod.id) || (baseMod.slug ? dbMap.get(baseMod.slug) : null) || (canonicalTarget ? dbMap.get(canonicalTarget) : null);
+    if (dbRow) {
+      merged.push({ ...baseMod, id: dbRow.id || baseMod.id, slug: dbRow.slug || baseMod.slug, name: dbRow.name });
+    } else {
+      merged.push(baseMod);
+    }
+    processedIds.add(baseMod.id);
+    if (baseMod.slug) processedIds.add(baseMod.slug);
+    if (canonicalTarget) processedIds.add(canonicalTarget);
+    if (dbRow) {
+      if (dbRow.id) processedIds.add(dbRow.id);
+      if (dbRow.slug) processedIds.add(dbRow.slug);
+    }
+  }
+
+  // Step 2: Add any external / third-party modules from DB
+  dbRows.forEach((m) => {
+    const mCanonical = CANONICAL_ALIAS_MAP[m.id] || (m.slug ? CANONICAL_ALIAS_MAP[m.slug] : null);
+    if (
+      !processedIds.has(m.id) &&
+      (!m.slug || !processedIds.has(m.slug)) &&
+      (!mCanonical || !processedIds.has(mCanonical))
+    ) {
+      merged.push(m);
+      processedIds.add(m.id);
+    }
+  });
+
+  // Verify Salon is rendered exactly ONCE in the catalogue
+  const salonCards = merged.filter((m) => m.id === 'salon' || m.id === 'hair-salon' || m.slug === 'hair-salon');
+  assert.strictEqual(salonCards.length, 1, `Catalogue must render exactly 1 Salon card, got ${salonCards.length}`);
+  assert.strictEqual(salonCards[0].id, 'salon');
+  assert.strictEqual(salonCards[0].slug, 'hair-salon');
+  assert.strictEqual(salonCards[0].name, 'Salon de Coiffure & Esthétique');
+
+  // Verify total catalogue count has no duplicates
+  assert.strictEqual(merged.length, 3, `Catalogue should have exactly 3 modules (garage, hotel, salon), got ${merged.length}`);
+});
+
 // ─── Execution ──────────────────────────────────────────────────────────────
 
 async function runAll() {

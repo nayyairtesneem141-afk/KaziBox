@@ -86,11 +86,34 @@ export async function POST(req: NextRequest) {
   // Sanitized audit log (never prints tokens or secrets)
   console.log(`[Billing Checkout] Initiated for company ${targetCompanyId.slice(0, 8)}... by user ${session.userId.slice(0, 8)}... (plan: ${planId}, cycle: ${billingCycle})`);
 
-  if (!planId || !billingCycle || !amount) {
+  if (!planId || !billingCycle) {
     return NextResponse.json(
       {
         success: false,
-        error: 'Missing required checkout fields (planId, billingCycle, amount)',
+        error: 'Missing required checkout fields (planId, billingCycle)',
+      },
+      { status: 422 }
+    );
+  }
+
+  if (billingCycle !== 'monthly' && billingCycle !== 'yearly' && billingCycle !== 'flex') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'INVALID_BILLING_CYCLE',
+        message: 'Billing cycle must be "flex", "monthly", or "yearly".',
+      },
+      { status: 422 }
+    );
+  }
+
+  const validPlanIds = ['single', 'bundle', 'all_access', 'custom', 'starter', 'pro', 'flex'];
+  if (!validPlanIds.includes(planId)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'INVALID_PLAN',
+        message: `Plan "${planId}" is not a valid platform plan.`,
       },
       { status: 422 }
     );
@@ -106,6 +129,137 @@ export async function POST(req: NextRequest) {
       },
       { status: 422 }
     );
+  }
+
+  const effectiveCurrency = body?.currency || countryConfig.defaultCurrency;
+  if (!countryConfig.currencies.includes(effectiveCurrency as any)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'INVALID_CURRENCY',
+        message: `Currency "${effectiveCurrency}" is not supported for country "${countryConfig.code}". Supported: ${countryConfig.currencies.join(', ')}`,
+      },
+      { status: 422 }
+    );
+  }
+
+  const targetModuleIds = Array.isArray(moduleIds) ? moduleIds : [];
+
+  // Deduplicate and filter out free tools (all 50 free utilities do not count toward paid SaaS limits)
+  const { sanitizePaidModuleSelection, resolveApplicableTierPrice, calculateFlexDuration } = await import('@/lib/pricing-tiers');
+  const { getModules } = await import('@/lib/modules');
+  const catalog = await getModules();
+  const { paidModuleIds, freeModuleIds } = sanitizePaidModuleSelection(targetModuleIds, catalog);
+
+  // Reject selections with zero paid SaaS applications (free tools cannot form a paid subscription)
+  if (paidModuleIds.length === 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'NO_PAID_MODULES_SELECTED',
+        message: 'At least one paid SaaS application must be selected for a subscription. Free tools do not require a paid plan.',
+      },
+      { status: 422 }
+    );
+  }
+
+  // Plan module constraints validation based on approved client tiers:
+  // Tier 1 (Single): 1 app. Tier 2 (Bundle): 2–4 apps.
+  if ((planId === 'single' || planId === 'starter') && paidModuleIds.length > 1) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'PLAN_MODULE_LIMIT_EXCEEDED',
+        message: 'Plan "single" (Tier 1) allows at most 1 paid SaaS application. For 2–4 applications, please select Tier 2 (Bundle).',
+      },
+      { status: 422 }
+    );
+  }
+
+  if ((planId === 'bundle' || planId === 'pro') && paidModuleIds.length > 4) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'PLAN_MODULE_LIMIT_EXCEEDED',
+        message: 'Plan "bundle" (Tier 2) allows at most 4 paid SaaS applications. For 5 or more applications, please select Tier 3 or Flex.',
+      },
+      { status: 422 }
+    );
+  }
+
+  let trustedAmount: number;
+  let netSubscriptionAmount: number;
+  let feeAmount: number = Number(body?.feeAmount || body?.fee_amount || 0);
+  let durationSeconds: number | undefined;
+  let monthlyReferencePrice: number | undefined;
+  let pricingSnapshot: any = undefined;
+
+  if (billingCycle === 'flex') {
+    // KaziBox Flex Pay-As-You-Can Flow
+    const requestedNet = body?.netAmount ?? body?.net_amount ?? body?.amount;
+    netSubscriptionAmount = Number(requestedNet);
+
+    if (isNaN(netSubscriptionAmount) || netSubscriptionAmount <= 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'INVALID_NET_AMOUNT',
+          message: 'KaziBox Flex subscription net amount must be greater than zero.',
+        },
+        { status: 422 }
+      );
+    }
+
+    const snapshot = resolveApplicableTierPrice(
+      paidModuleIds.length,
+      effectiveCurrency,
+      paidModuleIds,
+      freeModuleIds
+    );
+
+    // If currency price is unconfigured, fail closed and block checkout
+    if (!snapshot.available) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: snapshot.error || 'CURRENCY_PRICE_NOT_CONFIGURED',
+          message: snapshot.message || `Pricing for currency "${effectiveCurrency}" has not been approved and configured.`,
+        },
+        { status: 422 }
+      );
+    }
+
+    pricingSnapshot = snapshot;
+    monthlyReferencePrice = snapshot.effectiveMonthlyPrice;
+
+    const flexDuration = calculateFlexDuration(netSubscriptionAmount, monthlyReferencePrice);
+    durationSeconds = flexDuration.durationSeconds;
+
+    // Fees are strictly isolated from duration calculation and ambassador commissions
+    trustedAmount = netSubscriptionAmount + feeAmount;
+  } else {
+    // Legacy fixed Monthly / Yearly flow: Server-authoritative plan pricing calculation
+    const { calculatePlanPrice } = await import('@/lib/billing');
+    let authoritativePrice: { amount: number; currency: string };
+    try {
+      authoritativePrice = calculatePlanPrice(
+        planId,
+        billingCycle,
+        paidModuleIds.length,
+        effectiveCurrency
+      );
+    } catch (priceErr: any) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'UNSUPPORTED_PLAN_CURRENCY',
+          message: priceErr.message || `Pricing is not verified for currency "${effectiveCurrency}".`,
+        },
+        { status: 422 }
+      );
+    }
+    trustedAmount = authoritativePrice.amount;
+    netSubscriptionAmount = trustedAmount;
   }
 
   try {
@@ -127,9 +281,10 @@ export async function POST(req: NextRequest) {
       planId: resolvedPlanKey,
       planKey: resolvedPlanKey,
       billingCycle,
-      moduleIds: Array.isArray(moduleIds) ? moduleIds : [],
+      moduleIds: targetModuleIds,
       country: countryConfig.code,
-      amount: Number(amount),
+      amount: trustedAmount,
+      currency: effectiveCurrency,
       customer: {
         id: session.userId,
         name: customer?.name || session.email || 'Client KaziBox',
@@ -139,11 +294,18 @@ export async function POST(req: NextRequest) {
       },
       referralCode: referralCode || undefined,
       returnUrl: resolvedReturnUrl,
+      netAmount: netSubscriptionAmount,
+      feeAmount,
+      durationSeconds,
+      monthlyReferencePrice,
+      pricingSnapshot,
     });
 
     if (!result.success) {
       const httpStatus =
-        result.errorCode === 'INVALID_COUNTRY' || result.errorCode === 'VALIDATION_ERROR'
+        result.errorCode === 'PENDING_PAYMENT_PERSISTENCE_FAILED'
+          ? 500
+          : result.errorCode === 'INVALID_COUNTRY' || result.errorCode === 'VALIDATION_ERROR'
           ? 422
           : result.errorCode === 'UNAUTHORIZED'
           ? 401

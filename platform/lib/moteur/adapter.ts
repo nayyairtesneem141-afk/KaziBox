@@ -11,6 +11,7 @@ import {
 } from './types';
 import { getMoteurConfig, getMoteurConfigStatus, maskSecret } from './config';
 import { MOTEUR_PAYMENT_DESCRIPTION } from './countries';
+import { toCanonicalModuleIds } from './modules';
 
 /**
  * Custom error class for Moteur integration boundary
@@ -287,9 +288,12 @@ export class MoteurAdapter {
 
     try {
       const identifier = encodeURIComponent(query.sessionId || query.reference);
-      const endpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/${identifier}`;
+      const appCode = this.config.appCode || 'demosaas';
+      const saasId = this.config.saasId || '167a0c84-ce3c-488c-8367-d2e649933f34';
 
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
       if (this.config.apiKey) headers['x-engine-api-key'] = this.config.apiKey;
       const bearer = this.config.gatewayBearerToken || this.config.apiKey;
       if (bearer) {
@@ -297,38 +301,60 @@ export class MoteurAdapter {
         headers['apikey'] = bearer;
       }
 
-      let response = await this.executeHttpRequest(
-        endpoint,
-        {
-          method: 'GET',
-          headers,
-        }
-      );
+      const isEdgeGateway =
+        this.config.baseUrl.includes('engine-api-gateway') ||
+        this.config.baseUrl.includes('/functions/v1/');
 
-      // Fallback: If direct identifier path returns 404, check confirm endpoint or POST action
-      if (response.status === 404) {
-        const altEndpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/confirm?reference=${identifier}`;
-        const altResponse = await this.executeHttpRequest(altEndpoint, {
+      let response: Response;
+
+      if (isEdgeGateway) {
+        // Direct POST to engine-api-gateway with action: 'payments.status'
+        const gatewayEndpoint = this.config.baseUrl;
+        response = await this.executeHttpRequest(gatewayEndpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            action: 'payments.status',
+            app_code: appCode,
+            saas_id: saasId,
+            reference: query.reference,
+            idempotency_key: query.reference,
+            session_id: query.sessionId,
+            checkout_id: query.sessionId || query.reference,
+          }),
+        });
+      } else {
+        // Standard REST endpoint: GET /api/v1/payments/:id with fallback to POST action
+        const endpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/${identifier}`;
+        response = await this.executeHttpRequest(endpoint, {
           method: 'GET',
           headers,
         });
-        if (altResponse.ok) {
-          response = altResponse;
-        } else {
-          // Attempt POST to engine-api-gateway with action: 'payments.status'
-          const gatewayEndpoint = this.config.baseUrl;
-          const postResponse = await this.executeHttpRequest(gatewayEndpoint, {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'payments.status',
-              reference: query.reference,
-              idempotency_key: query.reference,
-              session_id: query.sessionId,
-              checkout_id: query.sessionId || query.reference,
-            }),
+
+        if (response.status === 404) {
+          const altEndpoint = `${this.config.baseUrl.replace(/\/+$/, '')}/api/v1/payments/confirm?reference=${identifier}`;
+          const altResponse = await this.executeHttpRequest(altEndpoint, {
+            method: 'GET',
+            headers,
           });
-          if (postResponse.ok) {
+          if (altResponse.ok) {
+            response = altResponse;
+          } else {
+            // Fallback POST to gateway baseUrl with action: 'payments.status'
+            const gatewayEndpoint = this.config.baseUrl;
+            const postResponse = await this.executeHttpRequest(gatewayEndpoint, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                action: 'payments.status',
+                app_code: appCode,
+                saas_id: saasId,
+                reference: query.reference,
+                idempotency_key: query.reference,
+                session_id: query.sessionId,
+                checkout_id: query.sessionId || query.reference,
+              }),
+            });
             response = postResponse;
           }
         }
@@ -338,25 +364,64 @@ export class MoteurAdapter {
 
       if (!response.ok) {
         throw new MoteurIntegrationError(
-          json.error?.message || 'Payment status verification failed',
-          json.error?.code || 'VERIFICATION_FAILED',
+          json.error?.message || json.message || 'Payment status verification failed',
+          json.error?.code || json.code || 'VERIFICATION_FAILED',
           response.status,
           json
         );
       }
 
-      const meta = json.metadata || {};
-      const rawStatus = String(json.status || json.data?.status || '').toLowerCase();
+      const meta = json.metadata || json.data?.metadata || {};
+      const rawStatus = String(
+        json.status ||
+        json.data?.status ||
+        json.payment_status ||
+        json.data?.payment_status ||
+        ''
+      ).toLowerCase();
+
       const normalizedStatus: 'pending' | 'succeeded' | 'failed' | 'expired' | 'refunded' =
         rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'paid'
           ? 'succeeded'
-          : rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected'
+          : rawStatus === 'failed' || rawStatus === 'cancelled' || rawStatus === 'rejected' || rawStatus === 'declined'
           ? 'failed'
-          : rawStatus === 'expired'
+          : rawStatus === 'expired' || rawStatus === 'timeout'
           ? 'expired'
           : rawStatus === 'refunded'
           ? 'refunded'
           : 'pending';
+
+      const companyId =
+        meta.company_id ||
+        meta.companyId ||
+        json.company_id ||
+        json.companyId ||
+        json.data?.company_id ||
+        json.data?.companyId ||
+        '';
+
+      const planId =
+        meta.plan_id ||
+        meta.planId ||
+        json.plan_id ||
+        json.planId ||
+        json.data?.plan_id ||
+        json.data?.planId ||
+        '';
+
+      const rawModuleIds =
+        meta.module_ids ||
+        meta.moduleIds ||
+        json.module_ids ||
+        json.moduleIds ||
+        json.data?.module_ids ||
+        json.data?.moduleIds;
+
+      const moduleIds = Array.isArray(rawModuleIds)
+        ? rawModuleIds
+        : typeof rawModuleIds === 'string'
+        ? rawModuleIds.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
 
       return {
         success: response.ok,
@@ -365,12 +430,12 @@ export class MoteurAdapter {
         status: normalizedStatus,
         amount: Number(json.amount || json.data?.amount) || 0,
         currency: json.currency || json.data?.currency || 'XOF',
-        companyId: meta.company_id || json.company_id || json.companyId || '',
-        planId: meta.plan_id || json.plan_id || json.planId || '',
-        moduleIds: Array.isArray(meta.module_ids) ? meta.module_ids : Array.isArray(json.module_ids) ? json.module_ids : [],
+        companyId,
+        planId,
+        moduleIds: toCanonicalModuleIds(moduleIds),
         billingCycle: meta.billing_cycle || json.billing_cycle || 'monthly',
         paidAt: json.paid_at || json.completed_at || json.data?.paid_at,
-        referralCode: meta.referral_code,
+        referralCode: meta.referral_code || meta.referralCode,
         providerReference: json.provider_reference || json.data?.provider_reference,
         providerName: json.provider_name || json.data?.provider_name,
         raw: json,

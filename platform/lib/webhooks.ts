@@ -33,9 +33,22 @@ export interface WebhookQueueItem {
 }
 
 const STORAGE_WEBHOOKS_KEY = 'kazibox_db_webhooks_queue';
-const DEFAULT_WEBHOOK_SECRET =
-  (typeof process !== 'undefined' && process.env?.KAZIBOX_WEBHOOK_SECRET) ||
-  'kz_whsec_mock_african_saas_hmac_secret_2026';
+
+function getDefaultWebhookSecret(): string {
+  const env =
+    typeof process !== 'undefined' &&
+    ((process.env.NEXT_PUBLIC_APP_ENV as string) === 'staging' || (process.env.NODE_ENV as string) === 'staging')
+      ? 'staging'
+      : (typeof process !== 'undefined' && process.env.NODE_ENV === 'production' ? 'production' : 'development');
+  const secret = typeof process !== 'undefined' ? process.env?.KAZIBOX_WEBHOOK_SECRET : undefined;
+  if (!secret) {
+    if (env === 'production' || env === 'staging') {
+      throw new Error(`[SECURITY ERROR] KAZIBOX_WEBHOOK_SECRET is required in ${env} environment.`);
+    }
+    return 'kz_whsec_mock_african_saas_hmac_secret_2026';
+  }
+  return secret;
+}
 
 export const INITIAL_WEBHOOK_QUEUE: WebhookQueueItem[] = [
   {
@@ -167,14 +180,15 @@ function computeSignatureHex(secret: string, data: string): string {
  */
 export function signWebhookPayload(
   payload: Record<string, any> | string,
-  secret: string = DEFAULT_WEBHOOK_SECRET
+  secret?: string
 ): string {
+  const effectiveSecret = secret || getDefaultWebhookSecret();
   const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
   if (crypto && typeof crypto.createHmac === 'function') {
-    const hash = crypto.createHmac('sha256', secret).update(payloadString, 'utf8').digest('hex');
+    const hash = crypto.createHmac('sha256', effectiveSecret).update(payloadString, 'utf8').digest('hex');
     return `sha256=${hash}`;
   }
-  const hash = computeSignatureHex(secret, payloadString);
+  const hash = computeSignatureHex(effectiveSecret, payloadString);
   return `sha256=${hash}`;
 }
 
@@ -393,7 +407,36 @@ export async function dispatchWebhookEvent(
     };
 
     const rawBody = JSON.stringify(envelope);
-    const { webhookSecret } = await getModuleRuntimeSecrets(mod.id);
+    let webhookSecret: string;
+    try {
+      const secrets = await getModuleRuntimeSecrets(mod.id);
+      webhookSecret = secrets.webhookSecret;
+    } catch (err: any) {
+      const failedItem: WebhookQueueItem = {
+        id: deliveryId,
+        event,
+        moduleId: mod.id,
+        targetUrl,
+        payload: envelope,
+        status: 'failed',
+        attempts: 1,
+        maxAttempts: 3,
+        signature: '',
+        lastAttemptAt: timestamp,
+        createdAt: timestamp,
+        responseStatus: 0,
+        responseBody: `Webhook delivery aborted: ${err?.message || 'Missing webhook signing secret'}`,
+      };
+      const existingIdx = queue.findIndex((q) => q.id === deliveryId && q.moduleId === mod.id);
+      if (existingIdx >= 0) {
+        queue[existingIdx] = failedItem;
+      } else {
+        queue.unshift(failedItem);
+      }
+      createdItems.push(failedItem);
+      continue;
+    }
+
     const signature = signWebhookPayload(rawBody, webhookSecret);
     const maxAttempts = 3;
 

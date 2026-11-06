@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "npm run dev --workspace=platform",
     "build": "npm run build --workspace=platform",
-    "start": "npm run start --workspace=platform"
+    "start": "npm run start --workspace=platform",
+    "db:keepalive": "node scripts/keep-supabase-awake.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
