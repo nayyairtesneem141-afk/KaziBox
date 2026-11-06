@@ -3,7 +3,7 @@ import { requireServerAuth } from '@/lib/server-auth';
 import { getModule } from '@/lib/modules';
 import { getModuleRuntimeSecrets } from '@/lib/registry';
 import { getStore } from '@/lib/storage';
-import { issueSsoToken } from '@kazibox/sdk';
+import { issueSsoToken, verifySsoToken } from '@kazibox/sdk';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +75,35 @@ async function handleLaunch(req: NextRequest, { params }: RouteContext) {
     );
   }
 
+  // 4b. Optional: Verify an existing SSO token against module's provisioned secret
+  const { searchParams } = new URL(req.url);
+  const actionParam = searchParams.get('action');
+  let bodyJson: any = null;
+  if (req.method === 'POST') {
+    try {
+      bodyJson = await req.clone().json();
+    } catch {}
+  }
+  const effectiveAction = actionParam || bodyJson?.action;
+  const tokenToVerify = searchParams.get('token') || bodyJson?.token;
+
+  if (effectiveAction === 'verify') {
+    if (!tokenToVerify) {
+      return NextResponse.json(
+        { success: false, valid: false, error: 'Token is required for verification', code: 'TOKEN_REQUIRED' },
+        { status: 400 }
+      );
+    }
+    const verification = verifySsoToken(tokenToVerify, ssoSecret);
+    return NextResponse.json({
+      success: verification.valid,
+      valid: verification.valid,
+      payload: verification.payload,
+      error: verification.error,
+      code: verification.code,
+    });
+  }
+
   const token = issueSsoToken(
     {
       user: {
@@ -102,7 +131,6 @@ async function handleLaunch(req: NextRequest, { params }: RouteContext) {
   const launchUrl = `${baseEntryUrl}${separator}token=${encodeURIComponent(token)}`;
 
   // Optional: check if caller wants HTTP 302 redirect directly
-  const { searchParams } = new URL(req.url);
   const shouldRedirect = searchParams.get('redirect') === 'true' || searchParams.get('redirect') === '1';
 
   if (shouldRedirect) {

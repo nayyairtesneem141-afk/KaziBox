@@ -12,6 +12,9 @@ import { User, Workspace } from '@kazibox/sdk';
  */
 
 function getPlatformSsoSecret(): string {
+  if (typeof window !== 'undefined') {
+    throw new Error('[SECURITY ERROR] SSO secret cannot be accessed in browser / client-side execution.');
+  }
   const secret = typeof process !== 'undefined' ? process.env?.KAZIBOX_SSO_SECRET : undefined;
   const env =
     typeof process !== 'undefined' &&

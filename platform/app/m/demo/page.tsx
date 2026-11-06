@@ -7,7 +7,7 @@ import { Card, Button, Badge } from '@kazibox/ui';
 import { useSession } from '@/lib/useSession';
 import { useTranslation, localize } from '@/lib/i18n';
 import { platformConfig } from '@/config';
-import { issueModuleToken, verifyModuleToken, ModuleTokenPayload } from '@/lib/sso';
+import { ModuleTokenPayload } from '@kazibox/sdk';
 import { STORAGE_FINANCE_KEY, INITIAL_FINANCE_RECORDS } from '@/lib/finance';
 
 function DemoModuleContent() {
@@ -27,22 +27,45 @@ function DemoModuleContent() {
   const [submitting, setSubmitting] = useState<'rev' | 'exp' | 'evt' | null>(null);
   const [apiKey, setApiKey] = useState('');
 
-  // Initialize or verify SSO Token
+  // Initialize or verify SSO Token via secure server endpoints
   useEffect(() => {
     let activeToken = urlToken;
+    let isCancelled = false;
 
-    // If no token in URL but user is signed in to platform, auto-issue a fresh 5-min SSO token
-    if (!activeToken && user && workspace) {
-      activeToken = issueModuleToken(user, workspace, 'demo', language);
-      setToken(activeToken);
-    }
+    async function initSso() {
+      // If no token in URL but user is signed in to platform, auto-issue a fresh 5-min SSO token via secure server launch
+      if (!activeToken && user && workspace) {
+        try {
+          const launchRes = await fetch('/api/v1/modules/demo/launch');
+          const launchData = await launchRes.json().catch(() => ({}));
+          if (!isCancelled && launchData.success && launchData.token) {
+            activeToken = launchData.token;
+            setToken(activeToken);
+          }
+        } catch (err) {
+          console.error('Failed to auto-issue demo launch token:', err);
+        }
+      }
 
-    if (activeToken) {
-      const verified = verifyModuleToken(activeToken);
-      if (verified.valid && verified.payload) {
-        setSsoPayload(verified.payload);
+      // Verify the token using the module's server-side verification endpoint
+      if (activeToken && !isCancelled) {
+        try {
+          const verifyRes = await fetch(`/api/v1/modules/demo/launch?action=verify&token=${encodeURIComponent(activeToken)}`);
+          const verifyData = await verifyRes.json().catch(() => ({}));
+          if (!isCancelled && verifyData.valid && verifyData.payload) {
+            setSsoPayload(verifyData.payload);
+          }
+        } catch (err) {
+          console.error('Failed to verify demo SSO token:', err);
+        }
       }
     }
+
+    initSso();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [urlToken, user, workspace, language]);
 
   // Fetch /api/v1/context using demo module API key

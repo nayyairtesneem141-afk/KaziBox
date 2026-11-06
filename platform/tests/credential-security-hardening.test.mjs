@@ -452,6 +452,126 @@ await test('Legitimate internal module uses platform secrets without error', asy
   assert.ok(secrets.webhookSecret);
 });
 
+// ---------------------------------------------------------------------------
+// 6. Client-Side SSO Secret Exposure Boundary & Sidebar Safety
+// ---------------------------------------------------------------------------
+console.log('\n6. Client-Side SSO Secret Exposure Boundary & Sidebar Safety');
+
+await test('Sidebar.tsx does not import issueModuleToken or access private SSO secrets', async () => {
+  const sidebarCode = fs.readFileSync(path.resolve('platform/app/(workspace)/components/Sidebar.tsx'), 'utf8');
+  assert.ok(!sidebarCode.includes('issueModuleToken'), 'Sidebar must not call or reference issueModuleToken');
+  assert.ok(!sidebarCode.includes('@/lib/sso'), 'Sidebar must not import from @/lib/sso');
+  assert.ok(!sidebarCode.includes('KAZIBOX_SSO_SECRET'), 'Sidebar must not reference KAZIBOX_SSO_SECRET');
+  assert.ok(sidebarCode.includes('/api/v1/modules/'), 'Sidebar must link external modules via launch API');
+  assert.ok(sidebarCode.includes('redirect=true'), 'Sidebar must use redirect=true for external SaaS launch');
+});
+
+await test('No Client Component (use client) imports private platform lib/sso', async () => {
+  function scanDir(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const fullPath = path.join(dir, ent.name);
+      if (ent.isDirectory() && ent.name !== 'node_modules' && ent.name !== '.next') {
+        scanDir(fullPath);
+      } else if (ent.isFile() && (ent.name.endsWith('.tsx') || ent.name.endsWith('.ts'))) {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        if (content.includes("'use client'") || content.includes('"use client"')) {
+          assert.ok(
+            !content.includes('@/lib/sso') && !content.includes('../lib/sso') && !content.includes('../../lib/sso'),
+            `Client component ${fullPath} must not import private server-only @/lib/sso`
+          );
+        }
+      }
+    }
+  }
+  scanDir(path.resolve('platform/app'));
+});
+
+await test('Browser execution of getPlatformSsoSecret throws client security error', async () => {
+  const { issueModuleToken } = await import('../lib/sso.ts');
+  globalThis.window = {};
+  try {
+    assert.throws(
+      () => {
+        issueModuleToken(
+          { id: 'usr-1', name: 'Test', email: 'test@example.com', role: 'owner' },
+          { id: 'ws-1', name: 'WS', company_id: 'ws-1', currency: 'XOF' },
+          'test-mod'
+        );
+      },
+      (err) => err.message.includes('SSO secret cannot be accessed in browser / client-side execution')
+    );
+  } finally {
+    delete globalThis.window;
+  }
+});
+
+await test('Server-side SSO token signing and verification remain fully functional', async () => {
+  const { issueModuleToken, verifyModuleToken } = await import('../lib/sso.ts');
+  const user = { id: 'usr-123', name: 'Fatou', email: 'fatou@example.com', role: 'owner' };
+  const ws = { id: 'ws-456', name: 'Dakar Hub', company_id: 'ws-456', currency: 'XOF' };
+
+  const token = issueModuleToken(user, ws, 'crm');
+  assert.ok(typeof token === 'string' && token.split('.').length === 3, 'Must issue 3-part JWT token');
+
+  const result = verifyModuleToken(token);
+  assert.ok(result.valid, 'Server must verify signed token');
+  assert.equal(result.payload?.userId, 'usr-123');
+  assert.equal(result.payload?.workspaceName, 'Dakar Hub');
+
+  // Tampered token must fail
+  const tampered = token.slice(0, -5) + 'xxxxx';
+  const badResult = verifyModuleToken(tampered);
+  assert.equal(badResult.valid, false, 'Tampered token must fail verification');
+});
+
+await test('External SaaS launch route supports secure token issuance and verify action', async () => {
+  const store = getStore();
+  const sub = store.subscriptions.find((s) => s.companyId === '11111111-1111-4111-8111-111111111111');
+  if (sub && !sub.includedModuleIds.includes('demo')) {
+    sub.includedModuleIds.push('demo');
+  }
+
+  const session = {
+    userId: 'usr-demo-1',
+    companyId: '11111111-1111-4111-8111-111111111111',
+    role: 'owner',
+    email: 'admin@kazibox.test',
+  };
+
+  // 1. Issue token via launch route
+  const launchReq = makeSessionRequest('http://localhost:3000/api/v1/modules/demo/launch', {
+    method: 'GET',
+    session,
+  });
+  const launchRes = await launchRoute.GET(launchReq, { params: { slug: 'demo' } });
+  assert.equal(launchRes.status, 200);
+  const launchData = await launchRes.json();
+  assert.ok(launchData.success);
+  assert.ok(launchData.token);
+  assert.ok(launchData.launchUrl);
+
+  // 2. Verify token via launch route with action=verify
+  const verifyReq = makeSessionRequest(
+    `http://localhost:3000/api/v1/modules/demo/launch?action=verify&token=${encodeURIComponent(launchData.token)}`,
+    { method: 'GET', session }
+  );
+  const verifyRes = await launchRoute.GET(verifyReq, { params: { slug: 'demo' } });
+  assert.equal(verifyRes.status, 200);
+  const verifyData = await verifyRes.json();
+  assert.equal(verifyData.valid, true);
+  assert.equal(verifyData.payload?.moduleId, 'demo');
+
+  // 3. Rejects invalid token
+  const invalidReq = makeSessionRequest(
+    'http://localhost:3000/api/v1/modules/demo/launch?action=verify&token=invalid.token.data',
+    { method: 'GET', session }
+  );
+  const invalidRes = await launchRoute.GET(invalidReq, { params: { slug: 'demo' } });
+  const invalidData = await invalidRes.json();
+  assert.equal(invalidData.valid, false);
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
 if (failed > 0) {
   process.exit(1);

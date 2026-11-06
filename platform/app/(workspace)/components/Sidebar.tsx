@@ -9,7 +9,6 @@ import { platformConfig } from '@/config';
 import { getModules } from '@/lib/modules';
 import { getSubscription } from '@/lib/billing';
 import { ModuleManifest } from '@kazibox/sdk';
-import { issueModuleToken } from '@/lib/sso';
 
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
@@ -196,17 +195,23 @@ export const Sidebar: React.FC = () => {
               {activeModules.map((mod) => {
                 const modName = localize(mod.name, language) || mod.id;
 
-                const ssoToken = user && workspace ? issueModuleToken(user, workspace, mod.id, language) : '';
-                const baseHref = mod.entryUrl || `/modules/${mod.slug}`;
-                const modHref = ssoToken
-                  ? `${baseHref}${baseHref.includes('?') ? '&' : '?'}token=${encodeURIComponent(ssoToken)}`
-                  : baseHref;
-                const isActive = pathname.startsWith(`/modules/${mod.slug}`) || pathname.startsWith(mod.entryUrl);
+                const isExternalSaaS =
+                  mod.kind === 'external' ||
+                  Boolean(mod.entryUrl && (mod.entryUrl.startsWith('http://') || mod.entryUrl.startsWith('https://')));
+
+                const modHref = isExternalSaaS
+                  ? `/api/v1/modules/${encodeURIComponent(mod.slug || mod.id)}/launch?redirect=true`
+                  : mod.entryUrl || `/modules/${mod.slug || mod.id}`;
+
+                const isActive =
+                  pathname.startsWith(`/modules/${mod.slug || mod.id}`) ||
+                  (Boolean(mod.entryUrl) && !isExternalSaaS && pathname.startsWith(mod.entryUrl));
 
                 return (
                   <Link
                     key={mod.id}
                     href={modHref}
+                    {...(isExternalSaaS ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                     className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl font-bold text-xs min-h-[42px] transition-all ${
                       isActive
                         ? 'bg-[var(--kazibox-primary-soft,#F3E8FF)] text-[var(--kazibox-primary,#6D28D9)] shadow-sm'
