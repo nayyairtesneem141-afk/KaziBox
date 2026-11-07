@@ -176,7 +176,7 @@ export default function ModuleRegistryDetailPage() {
         const mod = (payload?.module || payload?.data?.module) as ModuleManifest | undefined;
         if (mod) {
           setModuleData(mod);
-          setPwaResult(payload?.pwaCompliance || payload?.data?.pwa || runPwaChecks(mod));
+          setPwaResult(payload?.pwaCompliance || payload?.data?.pwa || runPwaChecks(mod, { origin: typeof window !== 'undefined' ? window.location.origin : undefined }));
           setEditForm(manifestToEditForm(mod));
           setJsonText(JSON.stringify(mod, null, 2));
           const meta = payload?.credentialsMetadata || payload?.data?.credentialsMetadata;
@@ -191,7 +191,7 @@ export default function ModuleRegistryDetailPage() {
     const mod = await getModule(id);
     if (mod) {
       setModuleData(mod);
-      setPwaResult(runPwaChecks(mod));
+      setPwaResult(runPwaChecks(mod, { origin: typeof window !== 'undefined' ? window.location.origin : undefined }));
       setEditForm(manifestToEditForm(mod));
       setJsonText(JSON.stringify(mod, null, 2));
       const keys = await getApiKeysForModule(mod.id);

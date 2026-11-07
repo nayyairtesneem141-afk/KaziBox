@@ -22,7 +22,7 @@ export const demoModuleManifest: ModuleManifest = {
   scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription'],
   languages: ['fr', 'en'],
   summaryUrl: '/api/v1/context',
-  webhookUrl: 'https://api.kazibox.internal/webhooks/demo',
+  webhookUrl: 'https://api.kazibox.com/webhooks/demo',
   pwa: {
     scope: '/m/demo',
     startUrl: '/m/demo',

@@ -62,7 +62,7 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const pwaCompliance = runPwaChecks(mod);
+  const pwaCompliance = runPwaChecks(mod, { origin: req.nextUrl.origin });
   const allCredentials = await getApiKeysForModule(mod.id);
 
   // Strip hashedSecret & encryptedSecret before returning metadata to client
@@ -114,7 +114,7 @@ export async function PUT(req: NextRequest, { params }: RouteContext) {
   return NextResponse.json({
     success: true,
     module: res.module,
-    pwaCompliance: runPwaChecks(res.module),
+    pwaCompliance: runPwaChecks(res.module, { origin: req.nextUrl.origin }),
   });
 }
 
@@ -161,7 +161,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
   return NextResponse.json({
     success: true,
     module: res.module,
-    pwaCompliance: runPwaChecks(res.module),
+    pwaCompliance: runPwaChecks(res.module, { origin: req.nextUrl.origin }),
   });
 }
 

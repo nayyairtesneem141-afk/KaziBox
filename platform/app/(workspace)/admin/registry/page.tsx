@@ -530,7 +530,7 @@ export default function AdminRegistryPage() {
             <tbody className="divide-y divide-[#F3F4F6]">
               {filteredModules.map((mod) => {
                 const modName = localize(mod.name, language) || mod.id;
-                const pwaStatus = runPwaChecks(mod);
+                const pwaStatus = runPwaChecks(mod, { origin: typeof window !== 'undefined' ? window.location.origin : undefined });
 
                 return (
                   <tr key={mod.id} className="hover:bg-[#F9FAFB] transition-colors">

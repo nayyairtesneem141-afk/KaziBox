@@ -268,17 +268,77 @@ export function isPrivateOrReservedHostOrIp(
 }
 
 /**
+ * Resolves the platform deployment origin used to evaluate relative internal module URLs.
+ * Returns null if the origin is unknown, untrusted, or unconfigured (ensuring fail-closed validation).
+ */
+export function resolveEffectiveOrigin(explicitOrigin?: string): string | null {
+  if (explicitOrigin && typeof explicitOrigin === 'string' && explicitOrigin.trim()) {
+    try {
+      const parsed = new URL(explicitOrigin.trim());
+      return parsed.origin;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    try {
+      const parsed = new URL(window.location.origin);
+      return parsed.origin;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof process !== 'undefined') {
+    if (process.env?.NEXT_PUBLIC_APP_URL) {
+      try {
+        const parsed = new URL(process.env.NEXT_PUBLIC_APP_URL.trim());
+        return parsed.origin;
+      } catch {
+        return null;
+      }
+    }
+    if (process.env?.VERCEL_URL) {
+      try {
+        const raw = process.env.VERCEL_URL.trim();
+        const urlStr = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
+        const parsed = new URL(urlStr);
+        return parsed.origin;
+      } catch {
+        return null;
+      }
+    }
+    if (process.env?.NODE_ENV === 'development') {
+      return 'http://localhost:3000';
+    }
+  }
+  // Unknown or untrusted origin fails closed (no automatic HTTPS pass)
+  return null;
+}
+
+/**
  * Validates URL syntax and enforces SSRF / private IP / metadata protection.
  */
 export function isValidEndpointUrl(
   url: string,
   allowRelative = true,
-  options: { allowLocalhost?: boolean } = {}
+  options: { allowLocalhost?: boolean; origin?: string } = {}
 ): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
+
+  // If relative URL is permitted and string starts with '/', resolve against origin and validate the resolved URL
   if (allowRelative && trimmed.startsWith('/') && !trimmed.startsWith('//')) {
-    return true;
+    const origin = resolveEffectiveOrigin(options.origin);
+    // Unknown or unconfigured origin cannot verify HTTPS transport; fail closed
+    if (!origin) {
+      return false;
+    }
+    try {
+      const resolved = new URL(trimmed, origin);
+      return isValidEndpointUrl(resolved.href, false, options);
+    } catch {
+      return false;
+    }
   }
 
   const defaultAllowLocalhost =
@@ -528,7 +588,10 @@ export function normalizeModuleManifest(
  * PWA Compliance Checklist Validator
  * A module CANNOT be set to "published" until every item passes!
  */
-export function runPwaChecks(manifest: ModuleManifest): PwaCheckResult {
+export function runPwaChecks(
+  manifest: ModuleManifest,
+  options: { origin?: string; allowLocalhost?: boolean } = {}
+): PwaCheckResult {
   const checks: PwaCheckItem[] = [];
 
   // 1. Manifest present
@@ -576,8 +639,9 @@ export function runPwaChecks(manifest: ModuleManifest): PwaCheckResult {
   });
 
   // 4. HTTPS Enforced
-  const isHttps = isValidEndpointUrl(manifest.entryUrl || '', true) &&
-    (!manifest.webhookUrl || isValidEndpointUrl(manifest.webhookUrl, true));
+  const isHttps =
+    isValidEndpointUrl(manifest.entryUrl || '', true, options) &&
+    (!manifest.webhookUrl || isValidEndpointUrl(manifest.webhookUrl, true, options));
   checks.push({
     key: 'https_enforced',
     label: {

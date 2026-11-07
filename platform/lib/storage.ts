@@ -729,7 +729,7 @@ export const INITIAL_MODULES: ModuleManifest[] = [
     scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription'],
     languages: ['fr', 'en'],
     summaryUrl: '/api/v1/context',
-    webhookUrl: 'https://api.kazibox.internal/webhooks/demo',
+    webhookUrl: 'https://api.kazibox.com/webhooks/demo',
     pwa: {
       scope: '/m/demo',
       startUrl: '/m/demo',
@@ -1161,7 +1161,7 @@ const STORAGE_KEYS = {
 };
 
 // Storage versioning to invalidate stale localStorage data across releases
-const STORE_VERSION = 'v3.4.0';
+const STORE_VERSION = 'v3.4.1';
 const STORE_VERSION_KEY = 'kazibox_db_schema_version';
 
 const globalForStorage = globalThis as unknown as {
@@ -1204,6 +1204,9 @@ function hydrateServerStoreFromDisk(baseStore: NonNullable<typeof globalForStora
     const raw = fs.readFileSync(filePath, 'utf8');
     if (!raw.trim()) return baseStore;
     const parsed = JSON.parse(raw);
+    if (parsed.version !== STORE_VERSION) {
+      return baseStore;
+    }
 
     if (Array.isArray(parsed.modules)) {
       const modMap = new Map<string, any>();
