@@ -58,6 +58,10 @@ export class MoteurPaymentService {
     this.adapter = customAdapter || new MoteurAdapter();
   }
 
+  public setAdapter(adapter: MoteurAdapter): void {
+    this.adapter = adapter;
+  }
+
   /**
    * Creates an unconfirmed checkout session with Moteur.
    *

@@ -56,3 +56,61 @@ export interface AuthSession {
   workspace: Workspace;
   token: string;
 }
+
+export type ModuleScope =
+  | 'read:context'
+  | 'write:finance'
+  | 'write:events'
+  | 'read:subscription'
+  | 'auth:exchange'
+  | 'write:billing'
+  | string;
+
+export interface HeadlessAuthExchangeRequest {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+
+export interface HeadlessAuthResponse {
+  success: boolean;
+  tokenType: 'Bearer';
+  accessToken: string;
+  expiresIn: number;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: UserRole;
+    companyId: string;
+  };
+  workspace: {
+    id: string;
+    name: string;
+    currency: string;
+    country: string;
+  };
+}
+
+export interface HeadlessCheckoutRequest {
+  planId: string;
+  billingCycle: 'monthly' | 'yearly' | 'flex';
+  companyId?: string;
+  moduleIds?: string[];
+  country?: 'CD' | 'CM' | 'SN' | 'CI';
+  amount?: number;
+  referralCode?: string;
+  customer?: { id?: string; name?: string; email?: string; phone?: string };
+  returnUrl: string;
+}
+
+export interface HeadlessCheckoutResponse {
+  success: boolean;
+  paymentId: string;
+  reference: string;
+  status: 'pending' | 'succeeded' | 'failed';
+  paymentUrl?: string;
+  ussdPrompt?: string | null;
+  amount: number;
+  currency: string;
+}

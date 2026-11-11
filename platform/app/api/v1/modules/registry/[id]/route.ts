@@ -7,6 +7,7 @@ import {
   updateModuleStatus,
   updateModuleManifest,
   provisionModuleCredentials,
+  revokeApiKey,
 } from '@/lib/registry';
 import { dispatchWebhookEvent } from '@/lib/webhooks';
 
@@ -149,7 +150,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const res = await updateModuleStatus(id, newStatus);
+  const res = await updateModuleStatus(id, newStatus, { origin: req.nextUrl.origin });
   if (!res.success || !res.module) {
     const status = res.error === 'Module introuvable' ? 404 : 422;
     return NextResponse.json(
@@ -188,6 +189,22 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
   } catch {}
 
   const action = body?.action || 'provision_credentials';
+
+  if (action === 'revoke_credential' || action === 'revoke_key') {
+    const target = (body?.keyId || body?.prefix || body?.keyPrefix || '').toString().trim();
+    if (!target) {
+      return NextResponse.json(
+        { success: false, error: 'keyId or prefix required to revoke', code: 'TARGET_REQUIRED' },
+        { status: 400 }
+      );
+    }
+    const res = await revokeApiKey(target, mod.id);
+    return NextResponse.json({
+      success: true,
+      moduleId: mod.id,
+      revokedCount: res.revokedCount,
+    });
+  }
 
   if (action === 'test_webhook') {
     const deliveries = await dispatchWebhookEvent(

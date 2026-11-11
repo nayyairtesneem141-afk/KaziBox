@@ -523,10 +523,15 @@ export const INITIAL_MODULES: ModuleManifest[] = [
       { label: { fr: 'Alertes Péremption', en: 'Expiry Alerts' }, path: '/modules/pharmastock/alerts' },
       { label: { fr: 'Ordonnances', en: 'Prescriptions' }, path: '/modules/pharmastock/prescriptions' },
     ],
-    scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription'],
+    scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription', 'auth:exchange', 'write:billing'],
     languages: ['fr', 'en'],
     summaryUrl: '/api/v1/pharmastock/summary',
-    webhookUrl: 'https://pharmastock.internal/api/webhooks/kazibox',
+    webhookUrl: 'https://pharmastock.kazibox.com/api/webhooks/kazibox',
+    redirectUris: [
+      'https://pharmastock.kazibox.com/auth/callback',
+      'https://pharmastock.com/auth/callback',
+      'https://app.pharmastock.africa/auth/callback',
+    ],
     pwa: {
       scope: '/modules/pharmastock',
       startUrl: '/modules/pharmastock',

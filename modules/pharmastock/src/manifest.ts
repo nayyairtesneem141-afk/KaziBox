@@ -33,10 +33,15 @@ export const pharmastockManifest: ModuleManifest = {
       path: '/modules/pharmastock/prescriptions',
     },
   ],
-  scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription'],
+  scopes: ['read:context', 'write:finance', 'write:events', 'read:subscription', 'auth:exchange', 'write:billing'],
   languages: ['fr', 'en'],
-  summaryUrl: '/api/modules/pharmastock/summary',
-  webhookUrl: 'https://pharmastock.internal/api/webhooks/kazibox',
+  summaryUrl: '/api/v1/pharmastock/summary',
+  webhookUrl: 'https://pharmastock.kazibox.com/api/webhooks/kazibox',
+  redirectUris: [
+    'https://pharmastock.kazibox.com/auth/callback',
+    'https://pharmastock.com/auth/callback',
+    'https://app.pharmastock.africa/auth/callback',
+  ],
   pwa: {
     scope: '/modules/pharmastock',
     startUrl: '/modules/pharmastock',

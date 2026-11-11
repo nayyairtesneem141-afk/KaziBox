@@ -564,6 +564,9 @@ export function normalizeModuleManifest(
       : (existing?.languages || ['fr', 'en']),
     summaryUrl: (input.summaryUrl ?? existing?.summaryUrl ?? (appUrl ? `${appUrl.replace(/\/+$/, '')}/api/summary` : '')).trim(),
     webhookUrl: (input.webhookUrl ?? existing?.webhookUrl ?? (appUrl ? `${appUrl.replace(/\/+$/, '')}/api/webhooks/kazibox` : '')).trim(),
+    redirectUris: Array.isArray(input.redirectUris)
+      ? input.redirectUris
+      : (existing?.redirectUris || (input.manifest?.redirectUris ? input.manifest.redirectUris : [])),
     pwa,
     kind: input.kind ?? existing?.kind ?? 'external',
     status: input.status ?? existing?.status ?? 'published',
@@ -962,6 +965,7 @@ export async function provisionModuleCredentials(
 
   // Ensure targetCompany satisfies public.module_api_keys.company_id UUID FK when Supabase is active
   if (supabase) {
+    // 1. Ensure targetCompany foreign key is valid
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetCompany);
     let companyVerified = false;
     if (isUuid) {
@@ -990,6 +994,29 @@ export async function provisionModuleCredentials(
         throw persistenceErr;
       }
     }
+
+    // 2. Ensure moduleId satisfies public.module_api_keys.module_id foreign key in public.modules
+    const { data: modExists, error: modErr } = await supabase
+      .from('modules')
+      .select('id')
+      .eq('id', moduleId)
+      .maybeSingle();
+
+    if (!modExists && !modErr) {
+      const currentMod = store.modules.find((m) => m.id === moduleId || m.slug === moduleId);
+      if (currentMod) {
+        const dbRow = buildDbModuleRow(currentMod);
+        const { error: upsertErr } = await supabase.from('modules').upsert(dbRow, { onConflict: 'id' });
+        if (upsertErr) {
+          const persistenceErr: any = new Error(
+            `DATABASE_PERSISTENCE_ERROR: Could not ensure module '${moduleId}' in database: ${upsertErr.message}`
+          );
+          persistenceErr.code = 'DATABASE_PERSISTENCE_ERROR';
+          persistenceErr.details = upsertErr;
+          throw persistenceErr;
+        }
+      }
+    }
   }
 
   const result: ProvisionedCredentials = {
@@ -1013,6 +1040,15 @@ export async function provisionModuleCredentials(
     const prefixDisplay = `${prefixBase}...`;
 
     if (supabase) {
+      // For platform API keys or full rotation, clean up prior platform API keys for this module
+      if (credentialType === 'all' || scope === 'platform') {
+        await supabase
+          .from('module_api_keys')
+          .delete()
+          .eq('module_id', moduleId)
+          .ilike('key_prefix', 'kz_%_mod_%');
+      }
+
       const selectQuery = supabase
         .from('module_api_keys')
         .insert({
@@ -1059,6 +1095,12 @@ export async function provisionModuleCredentials(
       hashedSecret: encodedHash,
       createdAt: nowIso,
     };
+
+    if (credentialType === 'all' || scope === 'platform') {
+      store.apiKeys = store.apiKeys.filter(
+        (k) => !(k.moduleId === moduleId && (k.type === 'api_key' || !k.type) && (k.scope === 'platform' || k.prefix.includes('_mod_')))
+      );
+    }
     store.apiKeys.push(record);
 
     result.keyId = keyId;
@@ -1304,6 +1346,49 @@ export async function getApiKeysForModule(moduleId: string, companyId?: string):
   return results;
 }
 
+/**
+ * Revokes an API key or credential by ID, key prefix, or module ID.
+ * Permanently removes it from Supabase and the server store.
+ */
+export async function revokeApiKey(
+  keyIdOrPrefix: string,
+  moduleId?: string
+): Promise<{ success: boolean; revokedCount: number }> {
+  let revokedCount = 0;
+  const store = getStore();
+
+  if (isSupabaseConfigured() && typeof window === 'undefined') {
+    const supabase: any = createAdminClient() || createServerClient();
+    if (supabase) {
+      let query = supabase.from('module_api_keys').delete();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(keyIdOrPrefix);
+      if (isUuid) {
+        query = query.eq('id', keyIdOrPrefix);
+      } else {
+        query = query.or(`key_prefix.eq.${keyIdOrPrefix},key_prefix.ilike.${keyIdOrPrefix}%`);
+      }
+      if (moduleId) {
+        query = query.eq('module_id', moduleId);
+      }
+      const { data, error } = await query.select('id');
+      if (!error && Array.isArray(data)) {
+        revokedCount += data.length;
+      }
+    }
+  }
+
+  const initialStoreLen = store.apiKeys.length;
+  store.apiKeys = store.apiKeys.filter((k) => {
+    const matchId = k.id === keyIdOrPrefix;
+    const matchPrefix = k.prefix === keyIdOrPrefix || k.prefix.startsWith(keyIdOrPrefix);
+    const matchModule = !moduleId || k.moduleId === moduleId;
+    return !((matchId || matchPrefix) && matchModule);
+  });
+  revokedCount += Math.max(0, initialStoreLen - store.apiKeys.length);
+
+  return { success: true, revokedCount };
+}
+
 async function resolveModuleKind(moduleId: string): Promise<'internal' | 'external'> {
   const cleanId = moduleId.toLowerCase().trim();
   const store = getStore();
@@ -1464,6 +1549,7 @@ export async function registerOrSaveModule(
     allowOverwrite?: boolean;
     companyId?: string;
     provisionCredentials?: boolean;
+    origin?: string;
   } = {}
 ): Promise<{
   success: boolean;
@@ -1534,7 +1620,7 @@ export async function registerOrSaveModule(
   }
 
   const completeManifest = normalizeModuleManifest(input, existingMod);
-  const pwaResult = runPwaChecks(completeManifest);
+  const pwaResult = runPwaChecks(completeManifest, { origin: options.origin });
 
   if (completeManifest.status === 'published' && !pwaResult.allPassed) {
     completeManifest.status = 'draft';
@@ -1600,7 +1686,8 @@ export async function registerOrSaveModule(
  */
 export async function updateModuleStatus(
   moduleId: string,
-  status: 'draft' | 'review' | 'published' | 'suspended'
+  status: 'draft' | 'review' | 'published' | 'suspended',
+  options: { origin?: string } = {}
 ): Promise<{ success: boolean; module?: ModuleManifest; error?: string }> {
   // In the browser, call the server API route so both Supabase and server store are updated
   if (typeof window !== 'undefined') {
@@ -1671,7 +1758,7 @@ export async function updateModuleStatus(
 
   // Enforce PWA Compliance if publishing
   if (status === 'published') {
-    const pwaResult = runPwaChecks(moduleToUpdate);
+    const pwaResult = runPwaChecks(moduleToUpdate, { origin: options.origin });
     if (!pwaResult.allPassed) {
       const failedChecks = pwaResult.checks
         .filter((c) => !c.passed)

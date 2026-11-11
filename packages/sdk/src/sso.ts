@@ -18,6 +18,9 @@ export interface ModuleTokenPayload {
   iat: number; // Issued at (seconds)
   exp: number; // Expiry at (seconds, 5 minutes lifetime)
   jti?: string; // Unique token identifier for single-use replay protection
+  iss?: string; // Token issuer (e.g. 'https://platform.kazibox.com')
+  aud?: string; // Audience (moduleId)
+  token_use?: 'sso_handoff' | 'user_api';
 }
 
 export interface IssueSsoTokenParams {
@@ -51,6 +54,9 @@ export function issueSsoToken(params: IssueSsoTokenParams, secret: string = DEFA
     iat: now,
     exp,
     jti,
+    iss: 'https://platform.kazibox.com',
+    aud: params.moduleId,
+    token_use: 'sso_handoff',
   };
 
   const header = { alg: 'HS256', typ: 'JWT' };
@@ -103,6 +109,11 @@ export function verifySsoToken(token: string, secret: string = DEFAULT_SSO_SECRE
         error: `Token expired at ${new Date(payload.exp * 1000).toISOString()} (TTL exceeded)`,
         code: 'EXPIRED',
       };
+    }
+
+    // 3. Optional soft-validation of issuer and audience if present
+    if (payload.iss && payload.iss !== 'https://platform.kazibox.com') {
+      return { valid: false, error: `Invalid token issuer: ${payload.iss}`, code: 'SIGNATURE_MISMATCH' };
     }
 
     return { valid: true, payload };

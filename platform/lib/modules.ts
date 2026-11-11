@@ -1,4 +1,4 @@
-import { ModuleManifest } from '@kazibox/sdk';
+ import { ModuleManifest } from '@kazibox/sdk';
 import { getStore, setStoreItem } from './storage';
 import { getSubscription } from './billing';
 import { notifyModuleActivated, notifyModuleDeactivated } from './notifications';

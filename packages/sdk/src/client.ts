@@ -1,6 +1,12 @@
 import { ModuleSummary, PlatformContext } from './contracts.js';
 import { verifySsoToken, issueSsoToken, IssueSsoTokenParams, SsoVerificationResult, DEFAULT_SSO_SECRET } from './sso.js';
 import { verifyWebhookSignature, signWebhookPayload } from './webhooks.js';
+import {
+  HeadlessAuthExchangeRequest,
+  HeadlessAuthResponse,
+  HeadlessCheckoutRequest,
+  HeadlessCheckoutResponse,
+} from './types.js';
 
 export interface KaziBoxClientConfig {
   apiKey: string;
@@ -251,5 +257,66 @@ export class KaziBoxClient {
       throw new Error('KaziBoxClient webhookSecret must be set to sign webhooks');
     }
     return signWebhookPayload(rawBody, this.webhookSecret);
+  }
+
+  /**
+   * Generates the browser authorize URL for initiating OAuth PKCE authorization.
+   */
+  public getAuthorizeUrl(params: {
+    redirectUri: string;
+    codeChallenge: string;
+    state: string;
+    testUserId?: string;
+    testCompanyId?: string;
+  }): string {
+    const url = new URL(`${this.baseUrl}/api/v1/auth/authorize`);
+    url.searchParams.set('module_id', this.moduleId || '');
+    url.searchParams.set('redirect_uri', params.redirectUri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('code_challenge', params.codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', params.state);
+    if (params.testUserId) url.searchParams.set('test_user_id', params.testUserId);
+    if (params.testCompanyId) url.searchParams.set('test_company_id', params.testCompanyId);
+    return url.toString();
+  }
+
+  /**
+   * Exchanges an authorization code and PKCE code_verifier for an asymmetric RS256 User Token.
+   */
+  public async exchangeAuthCode(
+    params: HeadlessAuthExchangeRequest
+  ): Promise<KaziBoxApiResponse<HeadlessAuthResponse>> {
+    return this.request('/api/v1/auth/exchange', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: params.code,
+        code_verifier: params.codeVerifier,
+        redirect_uri: params.redirectUri,
+      }),
+    });
+  }
+
+  /**
+   * Initiates a headless checkout session via Module API Key (write:billing scope).
+   */
+  public async initiateCheckout(
+    params: HeadlessCheckoutRequest
+  ): Promise<KaziBoxApiResponse<HeadlessCheckoutResponse>> {
+    const payload = {
+      companyId: params.companyId || this.workspaceId,
+      planId: params.planId,
+      billingCycle: params.billingCycle,
+      moduleIds: params.moduleIds || (this.moduleId ? [this.moduleId] : []),
+      country: params.country || 'CI',
+      amount: params.amount,
+      referralCode: params.referralCode,
+      customer: params.customer,
+      returnUrl: params.returnUrl,
+    };
+    return this.request('/api/v1/billing/checkout', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 }

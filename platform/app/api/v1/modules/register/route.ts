@@ -94,6 +94,7 @@ export async function POST(req: NextRequest) {
     allowOverwrite: Boolean(body.allowOverwrite),
     companyId: session.companyId,
     provisionCredentials: true,
+    origin: req.nextUrl.origin,
   });
 
   if (!result.success || !result.module || !result.credentials) {

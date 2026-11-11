@@ -1,20 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession, sessionBelongsToCompany, isPrivilegedRole } from '@/lib/server-auth';
+import { authenticateModuleApiKey } from '@/lib/api-auth';
+import { getModule } from '@/lib/modules';
 import { moteurService } from '@/lib/moteur/service';
 import { getCountryConfig } from '@/lib/moteur/countries';
 
 export const dynamic = 'force-dynamic';
 
 /**
+ * Validates browser redirect / return URL against registered module domains.
+ * Rules:
+ * - Must be https: (or http://localhost in dev/test).
+ * - Exact hostname must match registered redirectUris, entryUrl, or KaziBox origin.
+ * - Rejects unsafe schemes and non-registered domains.
+ */
+function validateCheckoutReturnUrl(
+  returnUrl: string,
+  allowedDomains: string[]
+): { valid: boolean; reason?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(returnUrl);
+  } catch {
+    return { valid: false, reason: 'Malformed returnUrl.' };
+  }
+
+  const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  const isDevOrTest = process.env.NODE_ENV !== 'production';
+
+  if (parsed.protocol !== 'https:' && !(isLocalhost && isDevOrTest)) {
+    return { valid: false, reason: 'returnUrl must use secure https: protocol.' };
+  }
+
+  const matched = allowedDomains.some((d) => {
+    if (!d) return false;
+    try {
+      const host = d.startsWith('http') ? new URL(d).hostname : d;
+      return host.toLowerCase() === parsed.hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+  });
+
+  if (!matched) {
+    return {
+      valid: false,
+      reason: `returnUrl domain '${parsed.hostname}' is not a registered domain for this module or platform.`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
  * POST /api/v1/billing/checkout
  *
  * Initiates a server-side checkout session with Moteur.
  *
- * Security Requirements:
- * - Requires authenticated session cookie.
- * - Caller must be 'owner' or 'platform_admin'.
- * - Company ID must match caller session.
- * - Session status starts as PENDING. Paid access is NEVER granted here.
+ * Dual-Authentication Support:
+ * 1. Headless Module API Key (`Authorization: Bearer kz_live_...` with `write:billing` scope).
+ * 2. Portal User Session Cookie (`kazibox_session` with `owner` or `platform_admin` role).
  */
 export async function POST(req: NextRequest) {
   let body: any;
@@ -42,49 +87,111 @@ export async function POST(req: NextRequest) {
     return_url,
   } = body || {};
 
-  const session = await getServerSession(req, companyId);
-  if (!session) {
-    const unauthSession = await getServerSession(req);
-    if (!unauthSession) {
+  let targetCompanyId: string;
+  let callerUserId: string;
+  let callerEmail: string | undefined;
+  const authHeader = req.headers.get('authorization') || '';
+  const isModuleApiKey = authHeader.trim().startsWith('Bearer kz_');
+
+  if (isModuleApiKey) {
+    // ── 1. Headless Authentication: Module API Key with write:billing scope ──
+    const authResult = await authenticateModuleApiKey(req, 'write:billing');
+    if (authResult.errorResponse) {
+      return authResult.errorResponse;
+    }
+
+    const { auth } = authResult;
+    targetCompanyId = auth!.workspaceId;
+
+    // Strict tenant isolation: Caller cannot initiate billing for a different companyId
+    if (companyId && companyId !== targetCompanyId) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' },
-        { status: 401 }
+        {
+          success: false,
+          error: 'Forbidden',
+          code: 'COMPANY_MISMATCH',
+          message: 'Module API key is not authorized to initiate billing for a foreign companyId.',
+        },
+        { status: 403 }
       );
     }
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Forbidden',
-        code: 'COMPANY_MISMATCH',
-        message: 'Vous n’avez pas accès à cet espace de travail pour initier la facturation.',
-      },
-      { status: 403 }
-    );
-  }
 
-  if (!isPrivilegedRole(session)) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Forbidden',
-        code: 'INSUFFICIENT_ROLE',
-        message: 'Only workspace owners or platform administrators can initiate billing checkout.',
-      },
-      { status: 403 }
-    );
-  }
+    callerUserId = customer?.id || `mod_${auth!.moduleId}`;
+    callerEmail = customer?.email;
 
-  const targetCompanyId = session.role === 'platform_admin' && companyId ? companyId : session.companyId;
+    // Validate returnUrl against module's registered domains if supplied
+    if (returnUrl || return_url) {
+      const candidateUrl = (returnUrl || return_url).trim();
+      const mod = auth!.module;
+      const allowedDomains = [
+        req.nextUrl.origin,
+        'platform.kazibox.com',
+        'kazibox.com',
+        ...(mod?.redirectUris || []),
+        mod?.entryUrl,
+      ].filter(Boolean) as string[];
 
-  if (session.role !== 'platform_admin' && companyId && companyId !== session.companyId) {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden', code: 'COMPANY_MISMATCH' },
-      { status: 403 }
-    );
+      const urlCheck = validateCheckoutReturnUrl(candidateUrl, allowedDomains);
+      if (!urlCheck.valid) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'INVALID_RETURN_URL',
+            message: urlCheck.reason,
+          },
+          { status: 422 }
+        );
+      }
+    }
+  } else {
+    // ── 2. Portal Authentication: Browser Session Cookie ──
+    const session = await getServerSession(req, companyId);
+    if (!session) {
+      const unauthSession = await getServerSession(req);
+      if (!unauthSession) {
+        return NextResponse.json(
+          { success: false, error: 'Unauthorized', code: 'NOT_AUTHENTICATED' },
+          { status: 401 }
+        );
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Forbidden',
+          code: 'COMPANY_MISMATCH',
+          message: 'Vous n’avez pas accès à cet espace de travail pour initier la facturation.',
+        },
+        { status: 403 }
+      );
+    }
+
+    if (!isPrivilegedRole(session)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Forbidden',
+          code: 'INSUFFICIENT_ROLE',
+          message: 'Only workspace owners or platform administrators can initiate billing checkout.',
+        },
+        { status: 403 }
+      );
+    }
+
+    targetCompanyId = session.role === 'platform_admin' && companyId ? companyId : session.companyId;
+
+    if (session.role !== 'platform_admin' && companyId && companyId !== session.companyId) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden', code: 'COMPANY_MISMATCH' },
+        { status: 403 }
+      );
+    }
+
+    callerUserId = session.userId;
+    callerEmail = session.email;
   }
 
   // Sanitized audit log (never prints tokens or secrets)
-  console.log(`[Billing Checkout] Initiated for company ${targetCompanyId.slice(0, 8)}... by user ${session.userId.slice(0, 8)}... (plan: ${planId}, cycle: ${billingCycle})`);
+  console.log(`[Billing Checkout] Initiated for company ${targetCompanyId.slice(0, 8)}... (plan: ${planId}, cycle: ${billingCycle})`);
 
   if (!planId || !billingCycle) {
     return NextResponse.json(
@@ -271,8 +378,8 @@ export async function POST(req: NextRequest) {
       rawPlanKey === 'single'
         ? 'starter'
         : rawPlanKey === 'bundle'
-        ? 'pro'
-        : rawPlanKey || 'starter';
+          ? 'pro'
+          : rawPlanKey || 'starter';
 
     const cleanPhone = customer?.phone ? String(customer.phone).replace(/[^\d+]/g, '') : undefined;
 
@@ -286,9 +393,9 @@ export async function POST(req: NextRequest) {
       amount: trustedAmount,
       currency: effectiveCurrency,
       customer: {
-        id: session.userId,
-        name: customer?.name || session.email || 'Client KaziBox',
-        email: customer?.email || session.email || undefined,
+        id: callerUserId,
+        name: customer?.name || callerEmail || 'Client KaziBox',
+        email: customer?.email || callerEmail || undefined,
         ...(customer || {}),
         ...(cleanPhone ? { phone: cleanPhone } : {}),
       },
@@ -306,12 +413,12 @@ export async function POST(req: NextRequest) {
         result.errorCode === 'PENDING_PAYMENT_PERSISTENCE_FAILED'
           ? 500
           : result.errorCode === 'INVALID_COUNTRY' || result.errorCode === 'VALIDATION_ERROR'
-          ? 422
-          : result.errorCode === 'UNAUTHORIZED'
-          ? 401
-          : result.errorCode?.startsWith('HTTP_4')
-          ? 400
-          : 502;
+            ? 422
+            : result.errorCode === 'UNAUTHORIZED'
+              ? 401
+              : result.errorCode?.startsWith('HTTP_4')
+                ? 400
+                : 502;
 
       console.warn(`[Billing Checkout] Session initialization rejected for company ${targetCompanyId.slice(0, 8)}...: httpStatus=${httpStatus}, errorCode=${result.errorCode}, message=${result.errorMessage}, raw=${JSON.stringify(result.raw)}`);
 

@@ -35,6 +35,7 @@ export interface ModuleManifest {
   languages: string[];
   summaryUrl: string;
   webhookUrl: string;
+  redirectUris?: string[];
   pwa: ModulePwaConfig;
 
   // Extended metadata for platform operations and catalogue
