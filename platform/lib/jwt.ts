@@ -30,21 +30,69 @@ export function getOrCreatePersistentJwtKeypair(): StoredKeypair {
     return cachedKeypair;
   }
 
-  // 1. If explicit environment variable is set
-  if (process.env.KAZIBOX_JWT_PRIVATE_KEY && process.env.KAZIBOX_JWT_PUBLIC_KEY) {
-    const pubKey = crypto.createPublicKey(process.env.KAZIBOX_JWT_PUBLIC_KEY);
+  const isDeployed =
+    process.env.NODE_ENV === 'production' ||
+    process.env.NEXT_PUBLIC_APP_ENV === 'staging' ||
+    process.env.VERCEL === '1' ||
+    process.env.VERCEL_ENV !== undefined;
+
+  // 1. Require explicit environment variables in all deployed environments.
+  //    Fail closed if either key is absent or cannot be parsed.
+  if (process.env.KAZIBOX_JWT_PRIVATE_KEY || process.env.KAZIBOX_JWT_PUBLIC_KEY || isDeployed) {
+    const privateKeyPem = process.env.KAZIBOX_JWT_PRIVATE_KEY;
+    const publicKeyPem = process.env.KAZIBOX_JWT_PUBLIC_KEY;
+
+    if (!privateKeyPem || !publicKeyPem) {
+      throw new Error(
+        '[KaziBox JWT] FATAL: Both KAZIBOX_JWT_PRIVATE_KEY and KAZIBOX_JWT_PUBLIC_KEY must be ' +
+          'set as environment variables in deployed (production/staging/Vercel) environments. ' +
+          'Disk-generated ephemeral keys are not permitted in deployment. ' +
+          'Generate a persistent RS256 keypair and inject both values as deployment secrets.'
+      );
+    }
+
+    // Validate both keys are parseable and form a consistent pair
+    let pubKey: crypto.KeyObject;
+    try {
+      pubKey = crypto.createPublicKey(publicKeyPem);
+    } catch (e: any) {
+      throw new Error(`[KaziBox JWT] FATAL: KAZIBOX_JWT_PUBLIC_KEY is not a valid PEM public key: ${e.message}`);
+    }
+
+    try {
+      crypto.createPrivateKey(privateKeyPem);
+    } catch (e: any) {
+      throw new Error(`[KaziBox JWT] FATAL: KAZIBOX_JWT_PRIVATE_KEY is not a valid PEM private key: ${e.message}`);
+    }
+
+    // Verify keypair consistency: sign a test payload and verify with the public key
+    try {
+      const testData = 'kazibox_keypair_consistency_check';
+      const signer = crypto.createSign('RSA-SHA256');
+      signer.update(testData);
+      const sig = signer.sign(privateKeyPem, 'base64');
+      const verifier = crypto.createVerify('RSA-SHA256');
+      verifier.update(testData);
+      const consistent = verifier.verify(publicKeyPem, sig, 'base64');
+      if (!consistent) {
+        throw new Error('Private key and public key do not form a matching RSA keypair.');
+      }
+    } catch (e: any) {
+      throw new Error(`[KaziBox JWT] FATAL: KAZIBOX_JWT_PRIVATE_KEY and KAZIBOX_JWT_PUBLIC_KEY do not match: ${e.message}`);
+    }
+
     const jwk = pubKey.export({ format: 'jwk' });
     cachedKeypair = {
       kid: process.env.KAZIBOX_JWT_KID || DEFAULT_KID,
-      privateKeyPem: process.env.KAZIBOX_JWT_PRIVATE_KEY,
-      publicKeyPem: process.env.KAZIBOX_JWT_PUBLIC_KEY,
+      privateKeyPem,
+      publicKeyPem,
       jwk: { ...jwk, kid: process.env.KAZIBOX_JWT_KID || DEFAULT_KID, alg: 'RS256', use: 'sig' },
       createdAt: new Date().toISOString(),
     };
     return cachedKeypair;
   }
 
-  // 2. Check persistent disk cache
+  // 2. Local development only: check persistent disk cache
   try {
     if (fs.existsSync(KEY_CACHE_PATH)) {
       const raw = fs.readFileSync(KEY_CACHE_PATH, 'utf-8');
@@ -55,10 +103,10 @@ export function getOrCreatePersistentJwtKeypair(): StoredKeypair {
       }
     }
   } catch (err) {
-    // Disk read failed, fallback to generation
+    // Disk read failed, fall through to generation
   }
 
-  // 3. Generate stable keypair and persist
+  // 3. Local development only: generate and persist to disk cache
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -89,7 +137,7 @@ export function getOrCreatePersistentJwtKeypair(): StoredKeypair {
     }
     fs.writeFileSync(KEY_CACHE_PATH, JSON.stringify(record, null, 2), 'utf-8');
   } catch (writeErr) {
-    // In read-only filesystem environments, memory cache still functions
+    // Read-only filesystem — memory cache still functions for local dev
   }
 
   cachedKeypair = record;

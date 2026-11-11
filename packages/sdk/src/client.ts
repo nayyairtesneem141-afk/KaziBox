@@ -7,6 +7,52 @@ import {
   HeadlessCheckoutRequest,
   HeadlessCheckoutResponse,
 } from './types.js';
+import * as nodeCrypto from 'crypto';
+
+export const KAZIBOX_PLATFORM_ISSUER = 'https://platform.kazibox.com';
+
+export interface VerifyUserTokenOptions {
+  /**
+   * Public key PEM string (SPKI format) obtained from GET /api/v1/auth/jwks?format=pem.
+   * Required. Never pass a private key here.
+   */
+  publicKeyPem: string;
+  /**
+   * Expected audience. Must match the moduleId that issued the token.
+   * Reject tokens whose 'aud' claim does not equal this value.
+   */
+  expectedAudience: string;
+  /**
+   * Expected issuer. Defaults to 'https://platform.kazibox.com'.
+   * Reject tokens whose 'iss' claim does not match.
+   */
+  expectedIssuer?: string;
+  /**
+   * Expected token_use. Must be 'user_api' for headless user tokens.
+   */
+  expectedTokenUse?: string;
+}
+
+export interface VerifyUserTokenResult {
+  valid: boolean;
+  claims?: {
+    sub: string;
+    email: string;
+    name: string;
+    role: string;
+    company_id: string;
+    workspace_id: string;
+    aud: string;
+    iss: string;
+    token_use: string;
+    scopes: string[];
+    iat: number;
+    exp: number;
+    jti: string;
+  };
+  error?: string;
+  code?: 'INVALID_FORMAT' | 'SIGNATURE_MISMATCH' | 'EXPIRED' | 'AUDIENCE_MISMATCH' | 'ISSUER_MISMATCH' | 'TOKEN_USE_MISMATCH' | 'PARSE_ERROR';
+}
 
 export interface KaziBoxClientConfig {
   apiKey: string;
@@ -237,6 +283,114 @@ export class KaziBoxClient {
    */
   public issueSso(params: IssueSsoTokenParams): string {
     return issueSsoToken(params, this.ssoSecret);
+  }
+
+  /**
+   * RS256 User API Token Verifier.
+   *
+   * Verifies a headless user token issued by KaziBox's POST /api/v1/auth/exchange endpoint.
+   * Uses PUBLIC-KEY-ONLY RS256 verification. Never requires or accepts a private key.
+   *
+   * Checks (all mandatory):
+   *  - RS256 cryptographic signature using the provided publicKeyPem
+   *  - Token expiry (exp claim)
+   *  - Issuer (iss === 'https://platform.kazibox.com')
+   *  - Audience (aud === options.expectedAudience)
+   *  - token_use === 'user_api'
+   *
+   * @param token - The Bearer access_token string from /api/v1/auth/exchange response
+   * @param options - Verification options including publicKeyPem and expectedAudience (both required)
+   */
+  public verifyUserToken(token: string, options: VerifyUserTokenOptions): VerifyUserTokenResult {
+    if (!token || typeof token !== 'string') {
+      return { valid: false, error: 'Token is missing or not a string', code: 'INVALID_FORMAT' };
+    }
+
+    const parts = token.trim().split('.');
+    if (parts.length !== 3) {
+      return { valid: false, error: 'Malformed token: expected 3 dot-separated parts', code: 'INVALID_FORMAT' };
+    }
+
+    const [encodedHeader, encodedPayload, encodedSig] = parts;
+
+    // 1. Verify RS256 signature using the provided PUBLIC key only
+    if (!options.publicKeyPem || typeof options.publicKeyPem !== 'string') {
+      return { valid: false, error: 'publicKeyPem is required for RS256 verification', code: 'INVALID_FORMAT' };
+    }
+
+    // Guard: reject anything that looks like a private key
+    if (options.publicKeyPem.includes('PRIVATE KEY')) {
+      return { valid: false, error: 'publicKeyPem must be a public key (SPKI format). Private keys are not accepted.', code: 'INVALID_FORMAT' };
+    }
+
+    try {
+      const dataToVerify = `${encodedHeader}.${encodedPayload}`;
+      const b64Sig = encodedSig.replace(/-/g, '+').replace(/_/g, '/');
+      const sigBuffer = Buffer.from(b64Sig, 'base64');
+
+      const verifier = nodeCrypto.createVerify('RSA-SHA256');
+      verifier.update(dataToVerify, 'utf-8');
+      const sigValid = verifier.verify(options.publicKeyPem, sigBuffer);
+      if (!sigValid) {
+        return { valid: false, error: 'RS256 signature verification failed', code: 'SIGNATURE_MISMATCH' };
+      }
+    } catch (sigErr: any) {
+      return { valid: false, error: `Signature check error: ${sigErr?.message}`, code: 'SIGNATURE_MISMATCH' };
+    }
+
+    // 2. Decode and validate claims
+    let claims: any;
+    try {
+      let b64Payload = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64Payload.length % 4) b64Payload += '=';
+      claims = JSON.parse(Buffer.from(b64Payload, 'base64').toString('utf-8'));
+    } catch (parseErr: any) {
+      return { valid: false, error: 'Failed to decode token payload', code: 'PARSE_ERROR' };
+    }
+
+    // 3. Expiry
+    const now = Math.floor(Date.now() / 1000);
+    if (!claims.exp || claims.exp < now) {
+      return {
+        valid: false,
+        error: `Token expired at ${new Date((claims.exp || 0) * 1000).toISOString()}`,
+        code: 'EXPIRED',
+      };
+    }
+
+    // 4. Issuer
+    const expectedIssuer = options.expectedIssuer || KAZIBOX_PLATFORM_ISSUER;
+    if (claims.iss !== expectedIssuer) {
+      return {
+        valid: false,
+        error: `Issuer mismatch: expected '${expectedIssuer}', got '${claims.iss}'`,
+        code: 'ISSUER_MISMATCH',
+      };
+    }
+
+    // 5. Audience (mandatory — partner MUST specify their moduleId)
+    if (!options.expectedAudience) {
+      return { valid: false, error: 'expectedAudience is required', code: 'INVALID_FORMAT' };
+    }
+    if (claims.aud !== options.expectedAudience) {
+      return {
+        valid: false,
+        error: `Audience mismatch: expected '${options.expectedAudience}', got '${claims.aud}'`,
+        code: 'AUDIENCE_MISMATCH',
+      };
+    }
+
+    // 6. token_use
+    const expectedTokenUse = options.expectedTokenUse || 'user_api';
+    if (claims.token_use !== expectedTokenUse) {
+      return {
+        valid: false,
+        error: `token_use mismatch: expected '${expectedTokenUse}', got '${claims.token_use}'`,
+        code: 'TOKEN_USE_MISMATCH',
+      };
+    }
+
+    return { valid: true, claims };
   }
 
   /**
